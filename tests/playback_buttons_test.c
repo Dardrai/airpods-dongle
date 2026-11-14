@@ -11,7 +11,7 @@
 #include "../src/btstack/phone_sink.h"
 #include "../src/btstack/phone_call.h"
 #include "../src/btstack/bluetooth_volume.h"
-#include "../src/btstack/avdtp_source_session.h"
+#include "../src/btstack/media_session.h"
 // The production unit src/btstack/avrcp_connection.c is linked; its state is test-visible.
 #include "../src/btstack/avrcp_connection_internal.h"
 static bool is_usb_streaming=true,phone_controls,mic;

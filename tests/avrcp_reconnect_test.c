@@ -10,7 +10,7 @@
 #include "../src/btstack/phone_sink.h"
 #include "../src/btstack/btstack_avdtp_source.h"
 #include "../src/btstack/bluetooth_volume.h"
-#include "../src/btstack/avdtp_source_session.h"
+#include "../src/btstack/media_session.h"
 // The production unit src/btstack/avrcp_connection.c is linked; its state is test-visible.
 #include "../src/btstack/avrcp_connection.h"
 #include "../src/btstack/avrcp_connection_internal.h"
@@ -25,10 +25,10 @@ static unsigned connects, disconnects, notifications, invalidations;
 static uint16_t next_cid, last_disconnected;
 static uint8_t connect_result;
 static bool setup_already_active;
-uint16_t avdtp_source_media_cid(void) {return media_tracker.avdtp_cid;}
-bool avdtp_source_accepts_incoming(void) {return a2dp_accept_incoming;}
-bool avdtp_source_profile_change_pending(void) {return profile_pending;}
-const uint8_t *avdtp_source_active_device(void) {return cur_active_device;}
+uint16_t media_session_cid(void) {return media_tracker.avdtp_cid;}
+bool media_session_accepts_incoming(void) {return a2dp_accept_incoming;}
+bool media_session_profile_change_pending(void) {return profile_pending;}
+const uint8_t *media_session_active_device(void) {return cur_active_device;}
 bool get_a2dp_connected_flag(void) {return a2dp_is_connected_flag;}
 uint32_t btstack_run_loop_get_time_ms(void) {return now;}
 bd_addr_t *get_device_addr(void) {return &selected;}

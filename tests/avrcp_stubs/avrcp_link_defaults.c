@@ -8,7 +8,7 @@
 #include "../../src/btstack/phone_sink.h"
 #include "../../src/btstack/phone_call.h"
 #include "../../src/btstack/bluetooth_volume.h"
-#include "../../src/btstack/avdtp_source_session.h"
+#include "../../src/btstack/media_session.h"
 #include "../../src/tinyusb/uac.h"
 #include "../../src/tinyusb/media_control.h"
 #define WEAK __attribute__((weak))
@@ -70,8 +70,8 @@ WEAK bool bt_volume_target_event(const uint8_t *packet, uint16_t size) {(void)pa
 WEAK bool bluetooth_volume_peer_matches(const uint8_t address[6]) {(void)address;return true;}
 WEAK void bluetooth_volume_connection_changed(uint16_t avrcp_cid) {(void)avrcp_cid;}
 WEAK void bluetooth_volume_record_operation(uint8_t operation_id) {(void)operation_id;}
-WEAK uint16_t avdtp_source_media_cid(void) {return 0;}
-WEAK bool avdtp_source_accepts_incoming(void) {return false;}
-WEAK bool avdtp_source_profile_change_pending(void) {return false;}
-WEAK const uint8_t *avdtp_source_active_device(void) {static const uint8_t none[6];return none;}
+WEAK uint16_t media_session_cid(void) {return 0;}
+WEAK bool media_session_accepts_incoming(void) {return false;}
+WEAK bool media_session_profile_change_pending(void) {return false;}
+WEAK const uint8_t *media_session_active_device(void) {static const uint8_t none[6];return none;}
 WEAK void playback_accessory_cancel_automatic_media(void) {}

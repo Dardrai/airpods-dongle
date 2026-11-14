@@ -28,7 +28,9 @@ static bool is_streaming;
 static bool call_active, call_opened, call_capture;
 static bool a2dp_connect_pending, a2dp_is_connected_flag, profile_reconnect;
 static bool allow_switch_slot, finish_scan_avdtp_codec;
-static bool have_aaceld_codec_capabilities, finish_setup_aac, aaceld_variable_allowed;
+static bool aaceld_variable_allowed;
+static unsigned codec_configuration_releases;
+static void a2dp_codec_configuration_released(void) { ++codec_configuration_releases; }
 static playback_options_t playback_options, profile_previous;
 #include "playback_defaults.inc"
 static uint8_t address[6], profile_peer[6], game_peer[6], connected_address[6];

@@ -2,62 +2,53 @@
 #include <assert.h>
 #include <stdio.h>
 #include "../src/btstack/playback_options.h"
+#include "btstack.h"
+#include "../src/btstack/btstack_aacp.h"
+#include "../src/btstack/btstack_avdtp_source.h"
+#include "../src/btstack/playback_eld.h"
+#include "../src/btstack/a2dp_codec_identifiers.h"
+#include "../src/btstack/media_session.h"
+// The production unit src/btstack/a2dp_codec_configuration.c is linked; its catalog is test-visible.
+#include "../src/btstack/a2dp_codec_configuration.h"
+#include "../src/btstack/a2dp_codec_configuration_internal.h"
 
-#define A2DP_CODEC_VENDOR_ID_APPLE 0x4c
-#define A2DP_APPLE_CODEC_AAC_ELD 0x8001
-#define AVDTP_CODEC_NON_A2DP 0xff
-#define AVDTP_AUDIO 0
-#define AVDTP_MEDIA_CODEC 7
-#define AVDTP_DELAY_REPORTING 8
-#define AVDTP_MAX_SEP_NUM 2
-#define btstack_assert assert
-typedef unsigned avdtp_media_codec_type_t;
-typedef struct {
-    struct { unsigned media_type, media_codec_type, media_codec_information_len;
-             uint8_t *media_codec_information; } media_codec;
-} avdtp_capabilities_t;
-typedef struct {
-    uint8_t *media_codec_configuration_info;
-    unsigned media_codec_configuration_len;
-    uint16_t remote_configuration_bitmap;
-    avdtp_capabilities_t remote_configuration;
-} endpoint_t;
-static endpoint_t endpoint, *stream_endpoint_aaceld;
-static struct { endpoint_t *local_stream_endpoint; } sc;
+static avdtp_stream_endpoint_t endpoint;
+static struct { avdtp_stream_endpoint_t *local_stream_endpoint; } sc;
 static struct { unsigned avdtp_cid, local_seid, remote_seid; } media_tracker={2,0,0};
-static struct { unsigned vendor_id, codec_id, codec_type, seid; bool delay_reporting, have_media_codec_capabilities;
-                uint8_t media_codec_event[14]; } remote_seps[2];
-static uint16_t num_remote_seps=1, selected_remote_sep_index;
 static uint16_t peer_cap_len=14;
 static uint8_t cur_codec=4;
 static bool a2dp_is_connected_flag=true, model_supported=true;
-static uint8_t media_aaceld_codec_capabilities[14]={0x4c,0,0,0,1,0x80,0,0x80,0,0x84,0,0x83,0xe8,0};
-static uint8_t local_stream_endpoint_aaceld_media_codec_configuration[14], media_codec_config_data[14];
-static unsigned media_codec_config_len;
 static playback_options_t playback_options;
 static uint16_t configured_services;
 static playback_game_t playback_game;
 static uint32_t delay_revision;
 static uint16_t reported_delay;
+uint16_t media_session_cid(void) { return media_tracker.avdtp_cid; }
+uint8_t media_session_codec(void) { return cur_codec; }
+playback_options_t media_session_playback_options(void) { return playback_options; }
+struct avdtp_stream_endpoint *media_session_local_endpoint(void) { return sc.local_stream_endpoint; }
+void media_session_set_local_endpoint(struct avdtp_stream_endpoint *ep) { sc.local_stream_endpoint=ep; }
+uint8_t media_session_local_seid(void) { return media_tracker.local_seid; }
+void media_session_set_local_seid(uint8_t seid) { media_tracker.local_seid=seid; }
+uint8_t media_session_remote_seid(void) { return media_tracker.remote_seid; }
+void media_session_set_remote_seid(uint8_t seid) { media_tracker.remote_seid=seid; }
+bool get_a2dp_connected_flag(void) { return a2dp_is_connected_flag; }
 static uint32_t btstack_run_loop_get_time_ms(void) { return 100; }
-static uint32_t aacp_receive_buffer_serial(void) { return 0; }
-static uint16_t aacp_receive_buffer_last(void) { return 0; }
+uint32_t aacp_receive_buffer_serial(void) { return 0; }
+uint16_t aacp_receive_buffer_last(void) { return 0; }
 static uint16_t avdtp_subevent_signaling_delay_report_get_avdtp_cid(const uint8_t *p) { return p[3]|(uint16_t)p[4]<<8; }
 static uint8_t avdtp_subevent_signaling_delay_report_get_local_seid(const uint8_t *p) { return p[5]; }
 static uint16_t avdtp_subevent_signaling_delay_report_get_delay_100us(const uint8_t *p) { return p[6]|(uint16_t)p[7]<<8; }
-static endpoint_t *a2dp_source_create_stream_endpoint(unsigned type, unsigned codec,
-        uint8_t *cap, unsigned cap_len, uint8_t *config, unsigned config_len) {
+avdtp_stream_endpoint_t *a2dp_source_create_stream_endpoint(avdtp_media_type_t type, avdtp_media_codec_type_t codec,
+        const uint8_t *cap, uint16_t cap_len, uint8_t *config, uint16_t config_len) {
     assert(type==AVDTP_AUDIO && codec==AVDTP_CODEC_NON_A2DP);
     assert(cap && config && cap_len==14 && config_len==14); return &endpoint;
 }
-static void avdtp_source_register_delay_reporting_category(unsigned seid) { assert(seid==3); }
-static unsigned avdtp_local_seid(endpoint_t *ep) { assert(ep==&endpoint); return 3; }
-static uint16_t store_bit16(uint16_t bits, unsigned bit, unsigned value) {
-    return value ? bits | (1u<<bit) : bits & ~(1u<<bit);
-}
-static const uint8_t *avdtp_subevent_signaling_media_codec_other_capability_get_media_codec_information(const uint8_t *event) { return event; }
-static uint16_t avdtp_subevent_signaling_media_codec_other_capability_get_media_codec_information_len(const uint8_t *event) { (void)event; return peer_cap_len; }
-static int avdtp_source_set_configuration(unsigned cid, unsigned local, unsigned remote,
+void avdtp_source_register_delay_reporting_category(uint8_t seid) { assert(seid==3); }
+uint8_t avdtp_local_seid(const avdtp_stream_endpoint_t *ep) { assert(ep==&endpoint); return 3; }
+const uint8_t *avdtp_subevent_signaling_media_codec_other_capability_get_media_codec_information(const uint8_t *event) { return event; }
+uint16_t avdtp_subevent_signaling_media_codec_other_capability_get_media_codec_information_len(const uint8_t *event) { (void)event; return peer_cap_len; }
+uint8_t avdtp_source_set_configuration(uint16_t cid, uint8_t local, uint8_t remote,
         uint16_t services, avdtp_capabilities_t configuration) {
     assert(cid==2 && local==3 && remote==4);
     assert(configuration.media_codec.media_codec_information_len==14);
@@ -65,8 +56,8 @@ static int avdtp_source_set_configuration(unsigned cid, unsigned local, unsigned
     configured_services=endpoint.remote_configuration_bitmap=services;
     return 0;
 }
-static bool aacp_model_game_supported(void) { return model_supported; }
-#include "playback_delay.inc"
+bool aacp_model_game_supported(void) { return model_supported; }
+
 static void receive_report(uint8_t cid, uint8_t seid, uint16_t size) {
     uint8_t bytes[8]={0,6,0,cid,0,seid,0x58,2};
     const uint8_t *packet=bytes;
@@ -144,6 +135,7 @@ static void incoming_configuration_binds_before_open_and_late_catalog_enables_ga
 }
 
 int main(void) {
+    num_remote_seps=1;
     remote_seps[0].vendor_id=A2DP_CODEC_VENDOR_ID_APPLE;
     remote_seps[0].codec_id=A2DP_APPLE_CODEC_AAC_ELD;
     remote_seps[0].codec_type=AVDTP_CODEC_NON_A2DP; remote_seps[0].seid=4;

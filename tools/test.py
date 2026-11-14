@@ -144,15 +144,6 @@ def playback_lifecycle_sources(directory):
         end = source.index("\n}", start) + 2
         functions.append(source[start:end])
     (directory / "playback_lifecycle.inc").write_text("\n".join(functions))
-    functions = []
-    for signature in ["static int find_remote_seid(", "static int setup_aaceld_configuration(){",
-                      "static bool playback_game_eligible(void) {",
-                      "static bool playback_eld_peer_configuration(",
-                      "static void playback_eld_bind_configuration("]:
-        start = source.index("\n" + signature) + 1
-        end = source.index("\n}", start) + 2
-        functions.append(source[start:end])
-    (directory / "playback_delay.inc").write_text("\n".join(functions))
     start = source.index("        case AVDTP_SUBEVENT_SIGNALING_DELAY_REPORT:")
     start = source.index("\n", start) + 1
     end = source.index("        case ", start)
@@ -355,7 +346,8 @@ def main():
         "playback_bitrate": ["tests/playback_bitrate_test.c"],
         "playback_adjust": ["tests/playback_adjust_test.c"],
         "playback_tempo": ["tests/playback_tempo_test.c", "-lm"],
-        "playback_delay": ["tests/playback_delay_test.c"],
+        "playback_delay": ["-DHOST_TEST_VISIBILITY", "-Itests/codec_stubs", "tests/playback_delay_test.c",
+                           "src/btstack/a2dp_codec_configuration.c", "tests/codec_stubs/codec_link_defaults.c"],
         "playback_lifecycle": ["tests/playback_lifecycle_test.c"],
         "playback_buttons": ["-DHOST_TEST_VISIBILITY", "-Itests/avrcp_stubs", "tests/playback_buttons_test.c",
                              "src/btstack/avrcp_connection.c", "tests/avrcp_stubs/avrcp_link_defaults.c"],

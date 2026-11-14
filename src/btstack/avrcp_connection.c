@@ -53,7 +53,7 @@
 #include "../tinyusb/uac.h"
 #include "../tinyusb/media_control.h"
 #include "bluetooth_volume.h"
-#include "avdtp_source_session.h"
+#include "media_session.h"
 #include "host_test_visibility.h"
 #include "avrcp_connection.h"
 #include "avrcp_connection_internal.h"
@@ -85,18 +85,18 @@ void avrcp_reconnect_reset(void) {
 
 static bool avrcp_reconnect_current(void) {
     const uint8_t *selected = (const uint8_t *)get_device_addr();
-    return avdtp_source_accepts_incoming() && get_a2dp_connected_flag() && !avdtp_source_profile_change_pending() &&
-        avrcp_retry.media_cid != 0 && avrcp_retry.media_cid == avdtp_source_media_cid() &&
+    return media_session_accepts_incoming() && get_a2dp_connected_flag() && !media_session_profile_change_pending() &&
+        avrcp_retry.media_cid != 0 && avrcp_retry.media_cid == media_session_cid() &&
         selected && !memcmp(selected, avrcp_retry.peer, 6) &&
-        !memcmp(avdtp_source_active_device(), avrcp_retry.peer, 6);
+        !memcmp(media_session_active_device(), avrcp_retry.peer, 6);
 }
 
 void avrcp_reconnect_schedule(bool immediate) {
-    if (avrcp_retry.media_cid != avdtp_source_media_cid() ||
-        memcmp(avrcp_retry.peer, avdtp_source_active_device(), 6)) {
+    if (avrcp_retry.media_cid != media_session_cid() ||
+        memcmp(avrcp_retry.peer, media_session_active_device(), 6)) {
         avrcp_reconnect_reset();
-        avrcp_retry.media_cid = avdtp_source_media_cid();
-        memcpy(avrcp_retry.peer, avdtp_source_active_device(), 6);
+        avrcp_retry.media_cid = media_session_cid();
+        memcpy(avrcp_retry.peer, media_session_active_device(), 6);
     }
     avrcp_retry.pending = false;
     avrcp_retry.since = btstack_run_loop_get_time_ms() - (immediate ? AVRCP_RETRY_MS : 0u);
@@ -138,7 +138,7 @@ PRIVATE_UNLESS_HOST_TEST void avrcp_packet_handler(uint8_t packet_type, uint16_t
             avrcp_subevent_connection_established_get_bd_addr(packet, event_addr);
             if (status != ERROR_CODE_SUCCESS){
                 printf("AVRCP: Connection failed, local cid 0x%02x, status 0x%02x\n", local_cid, status);
-                if (get_a2dp_connected_flag() && !memcmp(event_addr, avdtp_source_active_device(), 6) &&
+                if (get_a2dp_connected_flag() && !memcmp(event_addr, media_session_active_device(), 6) &&
                     ((!avrcp_cid && avrcp_retry.pending) ||
                      (local_cid != 0 && local_cid == avrcp_cid))) {
                     avrcp_cid = 0;
@@ -146,8 +146,8 @@ PRIVATE_UNLESS_HOST_TEST void avrcp_packet_handler(uint8_t packet_type, uint16_t
                 }
                 return;
             }
-            const uint8_t *expected = get_a2dp_connected_flag() ? avdtp_source_active_device() : (const uint8_t *)get_device_addr();
-            if (!avdtp_source_accepts_incoming() || expected == NULL ||
+            const uint8_t *expected = get_a2dp_connected_flag() ? media_session_active_device() : (const uint8_t *)get_device_addr();
+            if (!media_session_accepts_incoming() || expected == NULL ||
                 memcmp(event_addr, expected, sizeof(bd_addr_t)) != 0) {
                 avrcp_disconnect(local_cid);
                 return;
