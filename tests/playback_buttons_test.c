@@ -4,59 +4,44 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include "../src/tinyusb/media_control.h"
-#define ERROR_CODE_SUCCESS 0
-#define HCI_EVENT_PACKET 4
-#define HCI_EVENT_AVRCP_META 0xc0
-#define AVRCP_SUBEVENT_PLAY_STATUS_QUERY 3
-#define AVRCP_SUBEVENT_OPERATION 4
-#define AVRCP_SUBEVENT_NOTIFICATION_VOLUME_CHANGED 5
-#define AVRCP_MAX_COMMAND_PARAMETER_LENGTH 11
-#define AVRCP_OPERATION_ID_PLAY 0x44
-#define AVRCP_OPERATION_ID_PAUSE 0x46
-#define AVRCP_OPERATION_ID_FORWARD 0x4b
-#define AVRCP_OPERATION_ID_BACKWARD 0x4c
-#define AVRCP_OPERATION_ID_STOP 0x45
-#define AVRCP_OPERATION_ID_VOLUME_UP 0x41
-#define AVRCP_OPERATION_ID_VOLUME_DOWN 0x42
-#define UNUSED(x) (void)(x)
-typedef uint8_t avrcp_operation_id_t;
-static struct {uint16_t avrcp_cid;} media_tracker={7};
-static struct {unsigned song_length_ms,song_position_ms,status;} play_info;
+#include "btstack.h"
+#include "../src/tinyusb/uac.h"
+#include "../src/btstack/btstack_aacp.h"
+#include "../src/btstack/btstack_avdtp_source.h"
+#include "../src/btstack/phone_sink.h"
+#include "../src/btstack/phone_call.h"
+#include "../src/btstack/bluetooth_volume.h"
+#include "../src/btstack/avdtp_source_session.h"
+// The production unit src/btstack/avrcp_connection.c is linked; its state is test-visible.
+#include "../src/btstack/avrcp_connection_internal.h"
 static bool is_usb_streaming=true,phone_controls,mic;
 static bool audio_owned=true;
-static bool aacp_audio_owned(void) {return audio_owned;}
+bool aacp_audio_owned(void) {return audio_owned;}
+bool get_usb_streaming(void) {return is_usb_streaming;}
 static unsigned manual_operations;
-static void playback_accessory_manual(void) {++manual_operations;}
+void playback_accessory_cancel_automatic_media(void) {++manual_operations;}
 static unsigned usb_events,phone_events;
 static uint32_t volume_operations_up,volume_operations_down;
 static unsigned target_requests;
 static enum usb_media_command last;
-static bool phone_sink_handle_target(uint8_t type,uint16_t channel,uint8_t *p,uint16_t size) {(void)type;(void)channel;(void)p;(void)size;return false;}
-static uint8_t hci_event_packet_get_type(const uint8_t *p) {return p[0];}
-static uint16_t little_endian_read_16(const uint8_t *p,unsigned at) {return p[at]|(uint16_t)p[at+1]<<8;}
-static uint8_t avrcp_subevent_operation_get_operation_id(const uint8_t *p) {return p[5];}
-static uint8_t avrcp_subevent_operation_get_button_pressed(const uint8_t *p) {return p[6];}
-static const char *avrcp_operation2str(uint8_t operation) {(void)operation;return "test";}
-static uint8_t avrcp_target_play_status(uint16_t cid,unsigned length,unsigned position,unsigned status) {(void)cid;(void)length;(void)position;(void)status;return 0;}
-static bool phone_sink_owns_controls(void) {return phone_controls;}
-static bool usb_mic_requested(void) {return mic;}
-static bool aacp_mic_requested(void) {return mic;}
+bool phone_sink_owns_controls(void) {return phone_controls;}
+bool usb_mic_requested(void) {return mic;}
+bool aacp_mic_requested(void) {return mic;}
 static bool call_controls;
 static unsigned call_events;
-static bool phone_call_media_control(uint8_t operation) {(void)operation;if(call_controls)++call_events;return call_controls;}
-static void phone_sink_media_control(uint8_t operation) {(void)operation;++phone_events;}
-static void bt_volume_select_peer(void) {}
-static void bluetooth_volume_record_operation(uint8_t operation) {
+bool phone_call_media_control(uint8_t operation) {(void)operation;if(call_controls)++call_events;return call_controls;}
+bool phone_sink_media_control(uint8_t operation) {(void)operation;++phone_events;return true;}
+void bluetooth_volume_record_operation(uint8_t operation) {
     if(operation==AVRCP_OPERATION_ID_VOLUME_UP)++volume_operations_up;
     if(operation==AVRCP_OPERATION_ID_VOLUME_DOWN)++volume_operations_down;
 }
-static bool bt_volume_target_event(const uint8_t *packet,uint16_t size) {
+bool bt_volume_target_event(const uint8_t *packet,uint16_t size) {
     if(size!=7 || packet[5]!=3 || packet[6]>127)return false;
     ++target_requests;return true;
 }
 bool usb_media_enqueue(enum usb_media_command command) {last=command;++usb_events;return true;}
-#include "playback_buttons.inc"
 int main(void) {
+    avrcp_cid=7;
     // The pinned emitter sets length to 17 while delivering eight bytes for zero operands.
     uint8_t event[9]={HCI_EVENT_AVRCP_META,17,AVRCP_SUBEVENT_OPERATION,7,0,AVRCP_OPERATION_ID_PAUSE,1,0,0};
     avrcp_target_packet_handler(HCI_EVENT_PACKET,0,event,8);

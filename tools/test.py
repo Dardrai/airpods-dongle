@@ -114,12 +114,6 @@ def playback_lifecycle_sources(directory):
         start = source.index(declaration)
         defaults.append(source[start:source.index(";", start) + 1])
     (directory / "playback_defaults.inc").write_text("\n".join(defaults))
-    match = re.search(r"(?m)^static void avrcp_target_packet_handler\([^;]*?\)\s*\{", source)
-    if match is None:
-        raise ValueError("Missing AVRCP target callback")
-    start = match.start()
-    end = source.index("\n}", start) + 2
-    (directory / "playback_buttons.inc").write_text(source[start:end])
     clock_functions = []
     for signature in ["static void playback_clock_store(", "static void playback_clock_switch(", "static void playback_adjust_cancel_stream("]:
         match = re.search(r"(?m)^" + re.escape(signature) + r"[^;]*?\{", source)
@@ -255,13 +249,6 @@ def playback_lifecycle_sources(directory):
         path.write_text(prefix + path.read_text())
 
 
-def avrcp_reconnect_sources(directory):
-    source = (ROOT / "src/btstack/btstack_avdtp_source.c").read_text()
-    start = source.index("#define AVRCP_RETRY_MS")
-    end = source.index("\nstatic void avrcp_target_packet_handler(", start)
-    (directory / "avrcp_reconnect.inc").write_text(source[start:end])
-
-
 def usb_game_verification_sources(directory):
     source = (ROOT / "src/btstack/btstack_avdtp_source.c").read_text()
     functions=[]
@@ -370,7 +357,8 @@ def main():
         "playback_tempo": ["tests/playback_tempo_test.c", "-lm"],
         "playback_delay": ["tests/playback_delay_test.c"],
         "playback_lifecycle": ["tests/playback_lifecycle_test.c"],
-        "playback_buttons": ["tests/playback_buttons_test.c"],
+        "playback_buttons": ["-DHOST_TEST_VISIBILITY", "-Itests/avrcp_stubs", "tests/playback_buttons_test.c",
+                             "src/btstack/avrcp_connection.c", "tests/avrcp_stubs/avrcp_link_defaults.c"],
         "playback_timing": ["tests/playback_timing_test.c"],
         "playback_encoder_job": ["-Wno-unused-function", "tests/playback_encoder_job_test.c"],
         "phone_continuity": ["-Wno-unused-function", "tests/phone_continuity_test.c"],
@@ -395,7 +383,8 @@ def main():
         "volume_authority": ["tests/volume_authority_test.c"],
         "playback_volume": ["-DHOST_TEST_VISIBILITY", "-Itests/volume_stubs", "-Itests/media_stubs",
                             "tests/playback_volume_test.c", "src/btstack/bluetooth_volume.c", "src/tinyusb/media_control.c"],
-        "avrcp_reconnect": ["tests/avrcp_reconnect_test.c"],
+        "avrcp_reconnect": ["-DHOST_TEST_VISIBILITY", "-Itests/avrcp_stubs", "tests/avrcp_reconnect_test.c",
+                            "src/btstack/avrcp_connection.c", "tests/avrcp_stubs/avrcp_link_defaults.c"],
         "volume_trace": ["tests/volume_trace_test.c"],
         "volume_trace_console": ["tests/volume_trace_console_test.c"],
         "main_button_actions": ["tests/main_button_actions_test.c"],
@@ -424,7 +413,6 @@ def main():
     }
     with tempfile.TemporaryDirectory(prefix="airpods-tests-") as tmp:
         playback_lifecycle_sources(pathlib.Path(tmp))
-        avrcp_reconnect_sources(pathlib.Path(tmp))
         usb_game_verification_sources(pathlib.Path(tmp))
         uac_sources(pathlib.Path(tmp))
         usb_descriptor_sources(pathlib.Path(tmp))

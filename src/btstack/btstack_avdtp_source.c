@@ -82,6 +82,8 @@ _Static_assert(PHONE_PCM_CAPACITY <= PLAYBACK_PCM_FRAMES, "Phone jitter reserve 
 #include "volume_trace.h"
 #include "volume_authority.h"
 #include "bluetooth_volume.h"
+#include "avrcp_connection.h"
+#include "avdtp_source_session.h"
 #include "../tinyusb/dongle_control.h"
 #include "btstack_resample.h"
 #include "../tinyusb/uac.h"
@@ -147,7 +149,6 @@ typedef struct {
     uint16_t avdtp_cid;
     uint8_t  local_seid;
     uint8_t  remote_seid;
-    uint16_t avrcp_cid;
 
     uint32_t time_audio_data_sent; // ms
     uint32_t acc_num_missed_samples;
@@ -311,31 +312,6 @@ static uint32_t inspect_deadline;
 uint8_t dongle_output_codec(void) {
     return get_a2dp_connected_flag() ? (cur_codec == 4 ? 3 : cur_codec <= 2 ? cur_codec : 0) : 0;
 }
-
-static void avrcp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
-static void avrcp_reconnect_reset(void);
-static void avrcp_reconnect_schedule(bool immediate);
-static void avrcp_reconnect_poll(uint32_t now);
-static void avrcp_target_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
-static void avrcp_controller_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
-
-typedef struct {
-    uint8_t track_id[8];
-    uint32_t song_length_ms;
-    avrcp_playback_status_t status;
-    uint32_t song_position_ms; // 0xFFFFFFFF if not supported
-} avrcp_play_status_info_t;
-
-
-avrcp_track_t tracks[] = {
-    {{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02}, 2, "USB Audio", "Pico", "wasdwasd0105", "vivid", 12345},
-};
-
-avrcp_play_status_info_t play_info;
-
-static uint8_t sdp_avrcp_target_service_buffer[200];
-static uint8_t sdp_avrcp_controller_service_buffer[200];
-
 
 static uint16_t                  media_codec_config_len;
 static uint8_t                   media_codec_config_data[AVDTP_MAX_MEDIA_CODEC_CONFIG_LEN];
@@ -577,6 +553,12 @@ static uint32_t aaceld_bitrate = PLAYBACK_ELD_BITRATE;
 static bool aaceld_variable_allowed;
 bool finish_setup_aac;
 bool allow_switch_slot = true;
+
+// Narrow session view for the units split out of this file (avdtp_source_session.h).
+uint16_t avdtp_source_media_cid(void) { return media_tracker.avdtp_cid; }
+bool avdtp_source_accepts_incoming(void) { return a2dp_accept_incoming; }
+bool avdtp_source_profile_change_pending(void) { return profile_pending; }
+const uint8_t *avdtp_source_active_device(void) { return cur_active_device; }
 static btstack_timer_source_t suspend_recovery_timer;
 static bool suspend_recovery_pending;
 static bool recovery_reset_encoder;
@@ -994,7 +976,7 @@ void dongle_playback_accessory_event(const uint8_t *packet,uint16_t size) {
     playback_accessory_poll();
 }
 
-static void playback_accessory_manual(void) {
+void playback_accessory_cancel_automatic_media(void) {
     accessory_automation_cancel_media(&playback_accessory.state);
     usb_media_cancel_automatic();
 }
@@ -3192,7 +3174,7 @@ bool avdtp_disconnect_and_scan(void){
     l2cap_set_flushable_local_cid(0);
     a2dp_connect_pending = false;
     a2dp_source_disconnect(media_tracker.avdtp_cid);
-    if (media_tracker.avrcp_cid != 0) avrcp_disconnect(media_tracker.avrcp_cid);
+    if (avrcp_connection_cid() != 0) avrcp_disconnect(avrcp_connection_cid());
     audio_slot_queue_init(); // reset all slots on disconnect
     uint8_t currect_slot = read_uint8_last_flash();
 
@@ -3247,7 +3229,7 @@ static void playback_release_close(void) {
     aacp_disconnect();
     l2cap_set_flushable_local_cid(0);
     if (media_tracker.avdtp_cid) a2dp_source_disconnect(media_tracker.avdtp_cid);
-    if (media_tracker.avrcp_cid) avrcp_disconnect(media_tracker.avrcp_cid);
+    if (avrcp_connection_cid()) avrcp_disconnect(avrcp_connection_cid());
 }
 
 uint16_t dongle_routing_snapshot(uint8_t *out, uint16_t capacity) {
@@ -3826,225 +3808,6 @@ uint16_t dongle_playback_trace(uint8_t *out,uint16_t capacity) {
 }
 
 
-#define AVRCP_RETRY_MS 1000u
-#define AVRCP_RETRY_ATTEMPTS 3u
-static struct {
-    bd_addr_t peer;
-    uint16_t media_cid;
-    uint32_t since;
-    uint8_t attempts;
-    bool pending;
-} avrcp_retry;
-
-static void avrcp_reconnect_reset(void) {
-    memset(&avrcp_retry, 0, sizeof(avrcp_retry));
-}
-
-static bool avrcp_reconnect_current(void) {
-    const uint8_t *selected = (const uint8_t *)get_device_addr();
-    return a2dp_accept_incoming && a2dp_is_connected_flag && !profile_pending &&
-        avrcp_retry.media_cid != 0 && avrcp_retry.media_cid == media_tracker.avdtp_cid &&
-        selected && !memcmp(selected, avrcp_retry.peer, 6) &&
-        !memcmp(cur_active_device, avrcp_retry.peer, 6);
-}
-
-static void avrcp_reconnect_schedule(bool immediate) {
-    if (avrcp_retry.media_cid != media_tracker.avdtp_cid ||
-        memcmp(avrcp_retry.peer, cur_active_device, 6)) {
-        avrcp_reconnect_reset();
-        avrcp_retry.media_cid = media_tracker.avdtp_cid;
-        memcpy(avrcp_retry.peer, cur_active_device, 6);
-    }
-    avrcp_retry.pending = false;
-    avrcp_retry.since = btstack_run_loop_get_time_ms() - (immediate ? AVRCP_RETRY_MS : 0u);
-    if (!avrcp_reconnect_current()) avrcp_reconnect_reset();
-}
-
-static void avrcp_reconnect_poll(uint32_t now) {
-    if (!avrcp_reconnect_current()) {
-        avrcp_reconnect_reset();
-        return;
-    }
-    if (media_tracker.avrcp_cid || avrcp_retry.pending ||
-        avrcp_retry.attempts >= AVRCP_RETRY_ATTEMPTS ||
-        (uint32_t)(now - avrcp_retry.since) < AVRCP_RETRY_MS) return;
-    ++avrcp_retry.attempts;
-    avrcp_retry.pending = true;
-    avrcp_retry.since = now;
-    // BTstack can already be establishing the same peer and return no new CID.
-    // Keep that setup pending; restarting it cannot safely cancel its SDP query.
-    if (avrcp_connect(avrcp_retry.peer, &media_tracker.avrcp_cid) != ERROR_CODE_SUCCESS)
-        avrcp_retry.pending = false;
-}
-
-static void avrcp_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size){
-    if (phone_sink_handle_avrcp(packet_type, channel, packet, size)) return;
-    UNUSED(channel);
-    bd_addr_t event_addr;
-    uint16_t local_cid;
-    uint8_t  status = ERROR_CODE_SUCCESS;
-
-    if (packet_type != HCI_EVENT_PACKET || size < 3 || packet[1] + 2u != size) return;
-    if (hci_event_packet_get_type(packet) != HCI_EVENT_AVRCP_META) return;
-    
-    switch (packet[2]){
-        case AVRCP_SUBEVENT_CONNECTION_ESTABLISHED:
-            if (size != 14) return;
-            local_cid = avrcp_subevent_connection_established_get_avrcp_cid(packet);
-            status = avrcp_subevent_connection_established_get_status(packet);
-            avrcp_subevent_connection_established_get_bd_addr(packet, event_addr);
-            if (status != ERROR_CODE_SUCCESS){
-                printf("AVRCP: Connection failed, local cid 0x%02x, status 0x%02x\n", local_cid, status);
-                if (a2dp_is_connected_flag && !memcmp(event_addr, cur_active_device, 6) &&
-                    ((!media_tracker.avrcp_cid && avrcp_retry.pending) ||
-                     (local_cid != 0 && local_cid == media_tracker.avrcp_cid))) {
-                    media_tracker.avrcp_cid = 0;
-                    avrcp_reconnect_schedule(false);
-                }
-                return;
-            }
-            const uint8_t *expected = a2dp_is_connected_flag ? cur_active_device : (const uint8_t *)get_device_addr();
-            if (!a2dp_accept_incoming || expected == NULL ||
-                memcmp(event_addr, expected, sizeof(bd_addr_t)) != 0) {
-                avrcp_disconnect(local_cid);
-                return;
-            }
-            bt_volume_select_peer();
-            if (!bluetooth_volume_peer_matches(event_addr)) {
-                avrcp_disconnect(local_cid);
-                return;
-            }
-            avrcp_reconnect_reset();
-            media_tracker.avrcp_cid = local_cid;
-            bluetooth_volume_connection_changed(local_cid);
-            phone_sink_volume_invalidated();
-
-            printf("AVRCP: Channel to %s successfully opened, avrcp_cid 0x%02x\n", bd_addr_to_str(event_addr), media_tracker.avrcp_cid);
-             
-            avrcp_target_support_event(media_tracker.avrcp_cid, AVRCP_NOTIFICATION_EVENT_PLAYBACK_STATUS_CHANGED);
-            avrcp_target_support_event(media_tracker.avrcp_cid, AVRCP_NOTIFICATION_EVENT_TRACK_CHANGED);
-            avrcp_target_support_event(media_tracker.avrcp_cid, AVRCP_NOTIFICATION_EVENT_NOW_PLAYING_CONTENT_CHANGED);
-            avrcp_target_set_now_playing_info(media_tracker.avrcp_cid, NULL, sizeof(tracks)/sizeof(avrcp_track_t));
-            
-            printf("Enable Volume Change notification\n");
-            avrcp_controller_enable_notification(media_tracker.avrcp_cid, AVRCP_NOTIFICATION_EVENT_VOLUME_CHANGED);
-            printf("Enable Battery Status Change notification\n");
-            avrcp_controller_enable_notification(media_tracker.avrcp_cid, AVRCP_NOTIFICATION_EVENT_BATT_STATUS_CHANGED);
-            return;
-        
-        case AVRCP_SUBEVENT_CONNECTION_RELEASED:
-            if (size != 5 || avrcp_subevent_connection_released_get_avrcp_cid(packet) != media_tracker.avrcp_cid) return;
-            printf("AVRCP Target: Disconnected, avrcp_cid 0x%02x\n", avrcp_subevent_connection_released_get_avrcp_cid(packet));
-            media_tracker.avrcp_cid = 0;
-            bluetooth_volume_connection_changed(0);
-            phone_sink_volume_invalidated();
-            avrcp_reconnect_schedule(false);
-            return;
-        default:
-            break;
-    }
-
-    if (status != ERROR_CODE_SUCCESS){
-        printf("Responding to event 0x%02x failed, status 0x%02x\n", packet[2], status);
-    }
-}
-
-
-static void avrcp_target_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size){
-    if (phone_sink_handle_target(packet_type, channel, packet, size)) return;
-    UNUSED(channel);
-    uint8_t  status = ERROR_CODE_SUCCESS;
-
-    if (packet_type != HCI_EVENT_PACKET || size < 5) return;
-    if (hci_event_packet_get_type(packet) != HCI_EVENT_AVRCP_META) return;
-    if (packet[2] == AVRCP_SUBEVENT_OPERATION) {
-        // The pinned BTstack emitter reports its scratch capacity, but delivers the used bytes.
-        if (size < 8 || packet[7] > AVRCP_MAX_COMMAND_PARAMETER_LENGTH || size != 8u + packet[7] ||
-            (packet[1] + 2u != size && packet[1] != 6u + AVRCP_MAX_COMMAND_PARAMETER_LENGTH)) return;
-    } else if (packet[1] + 2u != size) return;
-    if (media_tracker.avrcp_cid == 0 || little_endian_read_16(packet, 3) != media_tracker.avrcp_cid) return;
-
-    bool button_pressed;
-    char const * button_state;
-    avrcp_operation_id_t operation_id;
-
-    switch (packet[2]){
-        case AVRCP_SUBEVENT_NOTIFICATION_VOLUME_CHANGED:
-            bt_volume_select_peer();
-            (void)bt_volume_target_event(packet,size);
-            break;
-        case AVRCP_SUBEVENT_PLAY_STATUS_QUERY:
-            status = avrcp_target_play_status(media_tracker.avrcp_cid, play_info.song_length_ms, play_info.song_position_ms, play_info.status);            
-            break;
-        // case AVRCP_SUBEVENT_NOW_PLAYING_INFO_QUERY:
-        //     status = avrcp_target_now_playing_info(avrcp_cid);
-        //     break;
-        case AVRCP_SUBEVENT_OPERATION:
-            operation_id = avrcp_subevent_operation_get_operation_id(packet);
-            button_pressed = avrcp_subevent_operation_get_button_pressed(packet) > 0;
-            button_state = button_pressed ? "PRESS" : "RELEASE";
-
-            printf("AVRCP Target: operation %s (%s)\n", avrcp_operation2str(operation_id), button_state);
-
-            if (!button_pressed){
-                break;
-            }
-            if (!aacp_audio_owned()) break;
-            if(operation_id==AVRCP_OPERATION_ID_PLAY || operation_id==AVRCP_OPERATION_ID_PAUSE ||
-               operation_id==AVRCP_OPERATION_ID_STOP || operation_id==AVRCP_OPERATION_ID_FORWARD ||
-               operation_id==AVRCP_OPERATION_ID_BACKWARD)playback_accessory_manual();
-            bluetooth_volume_record_operation((uint8_t)operation_id);
-            if (!is_usb_streaming && !usb_mic_requested() && phone_call_media_control((uint8_t)operation_id)) break;
-            if (phone_sink_owns_controls() && !is_usb_streaming && !aacp_mic_requested()) {
-                phone_sink_media_control((uint8_t)operation_id);
-                break;
-            }
-            switch (operation_id) {
-                case AVRCP_OPERATION_ID_PLAY: usb_media_enqueue(USB_MEDIA_PLAY); break;
-                case AVRCP_OPERATION_ID_PAUSE: usb_media_enqueue(USB_MEDIA_PAUSE); break;
-                case AVRCP_OPERATION_ID_FORWARD: usb_media_enqueue(USB_MEDIA_NEXT); break;
-                case AVRCP_OPERATION_ID_BACKWARD: usb_media_enqueue(USB_MEDIA_PREVIOUS); break;
-                case AVRCP_OPERATION_ID_STOP: usb_media_enqueue(USB_MEDIA_STOP); break;
-                default: break;
-            }
-            break;
-        default:
-            break;
-    }
-
-    if (status != ERROR_CODE_SUCCESS){
-        printf("Responding to event 0x%02x failed, status 0x%02x\n", packet[2], status);
-    }
-}
-
-static void avrcp_controller_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size){
-    if (phone_sink_handle_controller(packet_type, channel, packet, size)) return;
-    UNUSED(channel);
-    
-    if (packet_type != HCI_EVENT_PACKET || size < 5 || packet[1] + 2u != size) return;
-    if (hci_event_packet_get_type(packet) != HCI_EVENT_AVRCP_META) return;
-    if (media_tracker.avrcp_cid == 0 || little_endian_read_16(packet, 3) != media_tracker.avrcp_cid) return;
-    if (!media_tracker.avrcp_cid) return;
-    bt_volume_select_peer();
-    if (bt_volume_controller_event(packet,size)) return;
-    
-    switch (packet[2]){
-        case AVRCP_SUBEVENT_NOTIFICATION_EVENT_BATT_STATUS_CHANGED:
-            if (size < 7) break;
-            // see avrcp_battery_status_t
-            printf("AVRCP Controller: Notification Battery Status 0x%02x\n", avrcp_subevent_notification_event_batt_status_changed_get_battery_status(packet));
-            break;
-        case AVRCP_SUBEVENT_NOTIFICATION_STATE:
-            if (size < 8) break;
-            printf("AVRCP Controller: Notification %s - %s\n", 
-                avrcp_event2str(avrcp_subevent_notification_state_get_event_id(packet)), 
-                avrcp_subevent_notification_state_get_enabled(packet) != 0 ? "enabled" : "disabled");
-            break;
-        default:
-            break;
-    }  
-}
-
 int btstack_main(int argc, const char * argv[]){
 
     playback_reconnect_policy_load();
@@ -4062,17 +3825,7 @@ int btstack_main(int argc, const char * argv[]){
     avdtp_source_init();
     avdtp_source_register_packet_handler(&packet_handler);
 
-    // Initialize AVRCP Service
-    avrcp_init();
-    avrcp_register_packet_handler(&avrcp_packet_handler);
-    // Initialize AVRCP Target
-    avrcp_target_init();
-    avrcp_target_register_packet_handler(&avrcp_target_packet_handler);
-
-    // Initialize AVRCP Controller
-    avrcp_controller_init();
-    avrcp_controller_register_packet_handler(&avrcp_controller_packet_handler);
-
+    avrcp_connection_init();
 
     // Initialize SDP
     sdp_init();
@@ -4089,27 +3842,7 @@ int btstack_main(int argc, const char * argv[]){
     a2dp_source_create_sdp_record(sdp_avdtp_source_service_buffer, 0x10002, AVDTP_SOURCE_FEATURE_MASK_PLAYER, NULL, NULL);
     sdp_register_service(sdp_avdtp_source_service_buffer);
 
-
-
-    // Create AVRCP Target service record and register it with SDP. We receive Category 1 commands from the headphone, e.g. play/pause
-    memset(sdp_avrcp_target_service_buffer, 0, sizeof(sdp_avrcp_target_service_buffer));
-    uint16_t supported_features = AVRCP_FEATURE_MASK_CATEGORY_PLAYER_OR_RECORDER |
-                                  AVRCP_FEATURE_MASK_CATEGORY_MONITOR_OR_AMPLIFIER;
-#ifdef AVRCP_BROWSING_ENABLED
-    supported_features |= AVRCP_FEATURE_MASK_BROWSING;
-#endif
-    // NOTE: handle must be unique — 0x10002 is already used by the A2DP source
-    // record above; with a duplicate, sdp_register_service() rejects this record
-    // (SDP_HANDLE_ALREADY_REGISTERED) and the AVRCP Target service is never advertised.
-    avrcp_target_create_sdp_record(sdp_avrcp_target_service_buffer, 0x10004, supported_features, NULL, NULL);
-    sdp_register_service(sdp_avrcp_target_service_buffer);
-
-    // Create AVRCP Controller service record and register it with SDP. We send Category 2 commands to the headphone, e.g. volume up/down
-    memset(sdp_avrcp_controller_service_buffer, 0, sizeof(sdp_avrcp_controller_service_buffer));
-    uint16_t controller_supported_features = AVRCP_FEATURE_MASK_CATEGORY_MONITOR_OR_AMPLIFIER |
-                                             AVRCP_FEATURE_MASK_CATEGORY_PLAYER_OR_RECORDER;
-    avrcp_controller_create_sdp_record(sdp_avrcp_controller_service_buffer, 0x10003, controller_supported_features, NULL, NULL);
-    sdp_register_service(sdp_avrcp_controller_service_buffer);
+    avrcp_connection_register_service_records();
 
     if (!phone_sink_init()) return 1;
     if (!phone_call_init()) return 1;

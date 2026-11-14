@@ -55,6 +55,8 @@ typedef struct {
     btstack_timer_source_t audio_timer;
 } a2dp_media_sending_context_t;
 static a2dp_media_sending_context_t media_tracker;
+// The AVRCP channel is owned by avrcp_connection.c; this fixture keeps it beside the media session.
+static uint16_t avrcp_connection_cid(void) { return media_tracker.avrcp_cid; }
 static void playback_transport_recover(void *context) {(void)context;++playback_recoveries;media_tracker.streaming=false;}
 static uint32_t audio_timer_interval=10, scheduled_interval, timer_adds, timer_removes;
 static unsigned a2dp_sample_rate(void) { return 48000; }

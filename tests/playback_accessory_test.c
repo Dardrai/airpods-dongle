@@ -124,7 +124,7 @@ static void test_owner_and_manual_fences(void) {
         if(reason==3)owned=false;
         if(reason==4)call_active=true;
         if(reason==5)mic=true;
-        if(reason==6)playback_accessory_manual();
+        if(reason==6)playback_accessory_cancel_automatic_media();
         if(reason==7)host&=~1u;
         if(reason==8)choice(0x0a,1);
         if(reason==9)model_known=false;
