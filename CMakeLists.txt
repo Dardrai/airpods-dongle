@@ -61,9 +61,7 @@ add_custom_command(OUTPUT "${lhdc_fingerprint}"
         --label LHDC --library "$<TARGET_FILE:lhdcv5>" --output "${lhdc_fingerprint}"
     DEPENDS lhdcv5 "${CMAKE_CURRENT_LIST_DIR}/tools/codec_probe/stamp.py"
     VERBATIM)
-add_executable(airpods_dongle
-    "${codec_fingerprint}"
-    "${lhdc_fingerprint}"
+set(airpods_project_sources
     src/main.c
     src/pico_w_led.c
     src/slot_storage.c
@@ -86,7 +84,6 @@ add_executable(airpods_dongle
     src/btstack/phone_codec.c
     src/btstack/phone_worker.c
     src/btstack/phone_benchmark.c
-    3rd-party/libfreeaptx/freeaptx.c
     src/tinyusb/uac.c
     src/tinyusb/usb_descriptors.c
     src/tinyusb/debug_cdc.c
@@ -95,10 +92,28 @@ add_executable(airpods_dongle
     src/tinyusb/dongle_rpc.c
     src/tinyusb/dongle_features.c
 )
+# The project's own C is held to the same warning bar as the host tests; SDK, BTstack,
+# TinyUSB and 3rd-party sources keep their upstream flags.
+set(airpods_project_warning_flags -Wall -Wextra -Werror)
+set_source_files_properties(${airpods_project_sources} "${codec_fingerprint}" "${lhdc_fingerprint}"
+    PROPERTIES COMPILE_OPTIONS "${airpods_project_warning_flags}")
+add_executable(airpods_dongle
+    "${codec_fingerprint}"
+    "${lhdc_fingerprint}"
+    ${airpods_project_sources}
+    3rd-party/libfreeaptx/freeaptx.c
+)
 target_include_directories(airpods_dongle PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     3rd-party/fdk-aac
     3rd-party/libfreeaptx
+)
+# FDK's public headers define static helpers (FDK_audio.h) that every includer leaves unused;
+# treat them as system headers so the project warning flags judge only project code.
+target_include_directories(airpods_dongle SYSTEM PRIVATE
+    3rd-party/fdk-aac/libAACdec/include
+    3rd-party/fdk-aac/libAACenc/include
+    3rd-party/fdk-aac/libSYS/include
 )
 target_link_libraries(airpods_dongle PRIVATE
     pico_stdlib pico_multicore pico_btstack_ble pico_btstack_classic pico_btstack_cyw43
@@ -116,6 +131,9 @@ if(AIRPODS_EXPERIMENTAL_RADIO0076)
         "${radio0076_dir}/radio0076.c" "${radio0076_dir}/hci_gate.c" "${radio0076_dir}/readback.c"
         "${radio0076_dir}/preboot_patch.c" "${radio0076_dir}/calibration.c"
         "${radio0076_dir}/shared_bridge.c")
+    set_source_files_properties("${radio0076_dir}/radio0076.c" "${radio0076_dir}/hci_gate.c"
+        "${radio0076_dir}/readback.c" "${radio0076_dir}/preboot_patch.c" "${radio0076_dir}/calibration.c"
+        "${radio0076_dir}/shared_bridge.c" PROPERTIES COMPILE_OPTIONS "${airpods_project_warning_flags}")
     target_include_directories(airpods_dongle BEFORE PRIVATE "${radio0076_dir}"
         "${PICO_SDK_PATH}/src/rp2_common/pico_cyw43_driver/cybt_shared_bus")
     target_compile_definitions(airpods_dongle PRIVATE AIRPODS_EXPERIMENTAL_RADIO0076=1 EXTERNAL_PI_TRANSPORT=1)
@@ -147,9 +165,11 @@ pico_add_linker_script_override_path(airpods_dongle "${dongle_linker}"
     FILES section_heap.incl sections_stack.incl section_end.incl
     default_text_excludes.incl default_rodata_excludes.incl)
 pico_set_program_name(airpods_dongle "AirPods Dongle")
-pico_set_program_version(airpods_dongle "${PROJECT_VERSION}")
+# One definition only: two calls put two conflicting -DPICO_PROGRAM_VERSION_STRING on every compile.
 if(AIRPODS_EXPERIMENTAL_RADIO0076)
     pico_set_program_version(airpods_dongle "${PROJECT_VERSION}-experimental-radio0076")
+else()
+    pico_set_program_version(airpods_dongle "${PROJECT_VERSION}")
 endif()
 pico_init_picotool()
 include(tools/codec_probe/publish.cmake)

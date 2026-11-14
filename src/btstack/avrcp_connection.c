@@ -67,7 +67,8 @@ typedef struct {
 
 
 avrcp_track_t tracks[] = {
-    {{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02}, 2, "USB Audio", "Pico", "wasdwasd0105", "vivid", 12345},
+    {.track_id = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02}, .track_nr = 2, .title = "USB Audio",
+     .artist = "Pico", .album = "wasdwasd0105", .genre = "vivid", .song_length_ms = 12345},
 };
 
 avrcp_play_status_info_t play_info;

@@ -2744,7 +2744,10 @@ static void playback_reconnect_poll(uint32_t now) {
         else return;
         link_key_t key;
         link_key_type_t type;
-        if (memcmp(saved,peer,6) || !gap_get_link_key_for_bd_addr(peer,key,&type) ||
+        // BTstack's lookup takes a non-const address it never writes; hand it a copy.
+        uint8_t lookup_address[6];
+        memcpy(lookup_address, peer, sizeof lookup_address);
+        if (memcmp(saved,peer,6) || !gap_get_link_key_for_bd_addr(lookup_address,key,&type) ||
             !aacp_takeover_request(peer)) return;
         reconnect_auto_intent=true;
     }
@@ -3037,6 +3040,9 @@ uint16_t dongle_playback_trace(uint8_t *out,uint16_t capacity) {
 
 
 int btstack_main(int argc, const char * argv[]){
+    // BTstack's conventional entry signature; main.c passes no arguments.
+    (void)argc;
+    (void)argv;
 
     playback_reconnect_policy_load();
 

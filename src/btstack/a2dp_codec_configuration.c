@@ -43,6 +43,7 @@
  */
 
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 #include "btstack.h"
@@ -666,7 +667,7 @@ bool a2dp_codec_configuration_discovery_event(uint8_t *packet, uint16_t size) {
             }
             else {
                 printf("CAPABILITY - MEDIA_CODEC: OTHER, remote seid %u: \n", remote_seid);
-                printf("vendor_id 0x%04x: \n", vendor_id);
+                printf("vendor_id 0x%04" PRIx32 ": \n", vendor_id);
                 printf("codec_id: 0x%04x: \n", codec_id);
             }
 
