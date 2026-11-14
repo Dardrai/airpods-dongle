@@ -262,16 +262,6 @@ def avrcp_reconnect_sources(directory):
     (directory / "avrcp_reconnect.inc").write_text(source[start:end])
 
 
-def playback_volume_sources(directory):
-    source = (ROOT / "src/btstack/btstack_avdtp_source.c").read_text()
-    start=source.index("static struct {\n    uint32_t generation, set_revision")
-    end=source.index("static bool _bt_sink_volume_changed",start)
-    state=source[start:end]
-    start=source.index("static volume_authority_scope_t bt_volume_authority_scope(")
-    end=source.index("bool bridge_phone_open(void)",start)
-    (directory/"playback_volume.inc").write_text(state+"\n"+source[start:end])
-
-
 def usb_game_verification_sources(directory):
     source = (ROOT / "src/btstack/btstack_avdtp_source.c").read_text()
     functions=[]
@@ -403,7 +393,8 @@ def main():
         "usb_descriptor_selector": ["tests/usb_descriptor_selector_test.c"],
         "volume_sync": ["tests/volume_sync_test.c"],
         "volume_authority": ["tests/volume_authority_test.c"],
-        "playback_volume": ["-Itests/media_stubs", "tests/playback_volume_test.c", "src/tinyusb/media_control.c"],
+        "playback_volume": ["-DHOST_TEST_VISIBILITY", "-Itests/volume_stubs", "-Itests/media_stubs",
+                            "tests/playback_volume_test.c", "src/btstack/bluetooth_volume.c", "src/tinyusb/media_control.c"],
         "avrcp_reconnect": ["tests/avrcp_reconnect_test.c"],
         "volume_trace": ["tests/volume_trace_test.c"],
         "volume_trace_console": ["tests/volume_trace_console_test.c"],
@@ -433,7 +424,6 @@ def main():
     }
     with tempfile.TemporaryDirectory(prefix="airpods-tests-") as tmp:
         playback_lifecycle_sources(pathlib.Path(tmp))
-        playback_volume_sources(pathlib.Path(tmp))
         avrcp_reconnect_sources(pathlib.Path(tmp))
         usb_game_verification_sources(pathlib.Path(tmp))
         uac_sources(pathlib.Path(tmp))

@@ -68,6 +68,7 @@ add_executable(airpods_dongle
     src/pico_w_led.c
     src/slot_storage.c
     src/btstack/btstack_avdtp_source.c
+    src/btstack/bluetooth_volume.c
     src/btstack/btstack_hci.c
     src/btstack/btstack_ble_scan.c
     src/btstack/btstack_aacp.c

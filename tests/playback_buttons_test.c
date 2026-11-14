@@ -46,6 +46,10 @@ static unsigned call_events;
 static bool phone_call_media_control(uint8_t operation) {(void)operation;if(call_controls)++call_events;return call_controls;}
 static void phone_sink_media_control(uint8_t operation) {(void)operation;++phone_events;}
 static void bt_volume_select_peer(void) {}
+static void bluetooth_volume_record_operation(uint8_t operation) {
+    if(operation==AVRCP_OPERATION_ID_VOLUME_UP)++volume_operations_up;
+    if(operation==AVRCP_OPERATION_ID_VOLUME_DOWN)++volume_operations_down;
+}
 static bool bt_volume_target_event(const uint8_t *packet,uint16_t size) {
     if(size!=7 || packet[5]!=3 || packet[6]>127)return false;
     ++target_requests;return true;

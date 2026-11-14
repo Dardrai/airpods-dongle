@@ -9,25 +9,23 @@
 #include "../src/btstack/volume_trace.h"
 #include "../src/btstack/volume_authority.h"
 #include "../src/tinyusb/media_control.h"
-enum {AVRCP_SUBEVENT_NOTIFICATION_VOLUME_CHANGED=1,AVRCP_SUBEVENT_SET_ABSOLUTE_VOLUME_RESPONSE=2,
- AVRCP_CTYPE_RESPONSE_INTERIM=15,AVRCP_CTYPE_RESPONSE_CHANGED_STABLE=13,AVRCP_CTYPE_NOTIFY=3,
- AVRCP_CTYPE_RESPONSE_ACCEPTED=9,AVRCP_CTYPE_RESPONSE_REJECTED=10,AVRCP_CTYPE_RESPONSE_NOT_IMPLEMENTED=8,
- AVRCP_CONTROLLER=0,ERROR_CODE_SUCCESS=0};
-typedef struct {
- uint8_t transaction_id,controller_last_confirmed_transaction_id;
- uint32_t controller_volume_generation;
- bool controller_volume_active,controller_volume_interim;
-} avrcp_connection_t;
+#include "btstack.h"
+#include "../src/tinyusb/dongle_control.h"
+#include "../src/tinyusb/uac.h"
+#include "../src/btstack/btstack_hci.h"
+#include "../src/btstack/btstack_aacp.h"
+#include "../src/btstack/btstack_avdtp_source.h"
+#include "../src/btstack/phone_sink.h"
+// The production unit src/btstack/bluetooth_volume.c is linked; its state is test-visible.
+#include "../src/btstack/bluetooth_volume.h"
+#include "../src/btstack/bluetooth_volume_internal.h"
 static avrcp_connection_t connection;
-static volume_sync_t sink_volume;
-static bool _bt_sink_volume_changed,is_usb_streaming,mic,phone_owner,hid_ready,drop_ack;
+static bool is_usb_streaming,mic,phone_owner,hid_ready,drop_ack;
 static bool transfer_pending,drop_transfer,ack_reject,ack_applied,bt_busy;
 static int ack_clamp;
 static int ack_physical;
 static uint8_t transfer_report[3];
 static uint32_t now,revision,set_generation,receipt_snapshot;
-static uint32_t volume_operations_up,volume_operations_down,volume_target_requests;
-static uint32_t volume_changed_reports,volume_interim_reports,volume_ack_reports;
 static uint8_t peer[6]={1,2,3,4,5,6},physical;
 static unsigned absolute_sets,send_attempts,keys_up,keys_down,ack_delay,host_delay,host_mode;
 static uint8_t gain_writes[128];
@@ -45,10 +43,11 @@ static bool drop_interim;
 static bool audio_owned=true;
 static bool profile_connected=true;
 static uint32_t control_generation=1;
-static bool aacp_audio_owned(void){return audio_owned;}
-static bool get_a2dp_connected_flag(void){return profile_connected;}
-static bool usb_audio_available(void){return usb_media_generation()&1u;}
-static uint32_t dongle_control_client_generation(uint8_t client){assert(client==0);return control_generation;}
+bool aacp_audio_owned(void){return audio_owned;}
+bool get_a2dp_connected_flag(void){return profile_connected;}
+bool get_usb_streaming(void){return is_usb_streaming;}
+bool usb_audio_available(void){return usb_media_generation()&1u;}
+uint32_t dongle_control_client_generation(uint8_t client){assert(client==0);return control_generation;}
 enum {SOFTWARE_HOST,HARDWARE_HOST,IGNORING_HOST,FRACTIONAL_HOST};
 void dongle_control_available(bool v){(void)v;}
 void dongle_rpc_available(bool v){(void)v;}
@@ -83,37 +82,35 @@ static void complete_report(void){
  }
  // The model applies OS effects only on completed USB transfer, never submission.
 }
-static const uint8_t *get_device_addr(void){return peer;}
-static bool usb_host_active(void){return (usb_media_generation()&1u)!=0;}
-static bool usb_mic_requested(void){return mic;}
-static bool aacp_mic_requested(void){return mic;}
-static bool phone_sink_owns_controls(void){return phone_owner;}
-static void phone_sink_volume_invalidated(void){}
-static void phone_sink_volume_changed(uint8_t n){(void)n;}
-static uint32_t btstack_run_loop_get_time_ms(void){return now;}
-static uint32_t usb_volume_set_revision(void){return revision;}
-static uint32_t usb_volume_set_generation(void){return set_generation;}
-static uint32_t usb_volume_set_receipt(void){return receipt_snapshot;}
+bd_addr_t *get_device_addr(void){return (bd_addr_t *)peer;}
+bool usb_host_active(void){return (usb_media_generation()&1u)!=0;}
+bool usb_mic_requested(void){return mic;}
+bool aacp_mic_requested(void){return mic;}
+bool phone_sink_owns_controls(void){return phone_owner;}
+void phone_sink_volume_invalidated(void){}
+void phone_sink_volume_changed(uint8_t n){(void)n;}
+uint32_t btstack_run_loop_get_time_ms(void){return now;}
+uint32_t usb_volume_set_revision(void){return revision;}
+uint32_t usb_volume_set_generation(void){return set_generation;}
+uint32_t usb_volume_set_receipt(void){return receipt_snapshot;}
 static void queue_interim(void){
  if(++registration_generation==0)++registration_generation;
  connection.controller_volume_generation=registration_generation;
  connection.controller_volume_active=true;connection.controller_volume_interim=false;
  interim.pending=true;interim.due=now+query_delay;interim.epoch=registration_generation;interim.level=physical;++queries;
 }
-static uint32_t avrcp_controller_volume_event_generation(uint16_t cid){assert(cid==sink_volume.cid);return event_generation;}
-static uint16_t little_endian_read_16(const uint8_t *p,unsigned i){return (uint16_t)(p[i]|(p[i+1]<<8));}
-static uint8_t avrcp_controller_set_absolute_volume(uint16_t cid,uint8_t level){
+uint32_t avrcp_controller_volume_event_generation(uint16_t cid){assert(cid==sink_volume.cid);return event_generation;}
+uint8_t avrcp_controller_set_absolute_volume(uint16_t cid,uint8_t level){
  assert(cid==sink_volume.cid && level<=127);++send_attempts;if(bt_busy)return 0x0c;
  assert(absolute_sets<128);gain_writes[absolute_sets]=level;gain_write_times[absolute_sets]=now;++absolute_sets;
  connection.transaction_id=(uint8_t)((connection.transaction_id+1u)&15u);
  ack_applied=false;
  ack.pending=true;ack.due=now+ack_delay;ack.level=level;ack.label=connection.transaction_id;return 0;
 }
-static avrcp_connection_t *avrcp_get_connection_for_avrcp_cid_for_role(unsigned role,uint16_t cid){
+avrcp_connection_t *avrcp_get_connection_for_avrcp_cid_for_role(unsigned role,uint16_t cid){
  assert(role==AVRCP_CONTROLLER);return cid==sink_volume.cid?&connection:NULL;
 }
-// Actual source handlers/state and separately compiled production HID queue.
-#include "playback_volume.inc"
+// Production handlers/state come from the linked bluetooth_volume.c and media_control.c units.
 static void event_epoch(uint8_t subtype,uint8_t ctype,uint8_t value,uint32_t epoch){
  event_generation=epoch;
  if(subtype==AVRCP_SUBEVENT_NOTIFICATION_VOLUME_CHANGED) {

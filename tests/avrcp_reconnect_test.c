@@ -49,7 +49,8 @@ static void avrcp_subevent_connection_established_get_bd_addr(const uint8_t *p,b
 }
 static uint16_t avrcp_subevent_connection_released_get_avrcp_cid(const uint8_t *p) {return p[3]|p[4]<<8;}
 static void bt_volume_select_peer(void) {sink_volume.selected=true;memcpy(sink_volume.peer,selected,6);}
-static void bt_volume_relay_reset(bool changed) {(void)changed;}
+static bool bluetooth_volume_peer_matches(const uint8_t address[6]) {return sink_volume.selected && !memcmp(address,sink_volume.peer,6);}
+static void bluetooth_volume_connection_changed(uint16_t cid) {volume_sync_connection(&sink_volume,cid,btstack_run_loop_get_time_ms());}
 static void phone_sink_volume_invalidated(void) {++invalidations;}
 static const char *bd_addr_to_str(const uint8_t *address) {(void)address;return "peer";}
 static void avrcp_target_support_event(uint16_t cid,uint8_t event) {assert(cid);(void)event;}
