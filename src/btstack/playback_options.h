@@ -5,22 +5,24 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "playback_eld.h"
+#include "../tinyusb/dongle_protocol_spec.h"
 
 typedef struct { uint8_t codec, rate_mode; uint32_t bitrate; } playback_options_t;
 static inline bool playback_options_valid(playback_options_t p) {
-    if (p.codec>3 || p.rate_mode>1) return false;
-    if (p.codec<=1) return !p.rate_mode && !p.bitrate;
-    if (p.codec==2 && p.rate_mode) return false;
+    if (p.codec>DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC_ELD ||
+        p.rate_mode>DONGLE_AUDIO_PROFILE_RATE_MODE_VARIABLE_BITRATE) return false;
+    if (p.codec<=DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_SBC) return !p.rate_mode && !p.bitrate;
+    if (p.codec==DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC && p.rate_mode) return false;
     if (!p.bitrate) return true;
-    if (p.codec==2 && p.bitrate==96000) return true;
-    if (p.codec==2 && p.bitrate>220000) return false;
+    if (p.codec==DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC && p.bitrate==96000) return true;
+    if (p.codec==DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC && p.bitrate>220000) return false;
     return p.bitrate==128000 || p.bitrate==174000 || p.bitrate==192000 ||
            p.bitrate==220000 || p.bitrate==256000;
 }
 static inline bool playback_options_aac_supported(playback_options_t p, uint8_t objects,
                                                    uint16_t rates, uint8_t channels,
                                                    uint32_t ceiling) {
-    if (!playback_options_valid(p) || p.codec!=2 || !(objects&0x60) ||
+    if (!playback_options_valid(p) || p.codec!=DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC || !(objects&0x60) ||
         !(rates&8) || !(channels&4)) return false;
     uint32_t desired=p.bitrate ? p.bitrate : 220000;
     return (!p.bitrate || !ceiling || desired<=ceiling) && (!ceiling || ceiling>=96000);
@@ -34,7 +36,7 @@ static inline bool playback_options_preflight(playback_options_t p, bool complet
 }
 static inline uint32_t playback_options_eld_rate(const uint8_t *config, unsigned size,
                                                  playback_options_t p) {
-    if (!playback_options_valid(p) || (p.codec!=0 && p.codec!=3) ||
+    if (!playback_options_valid(p) || (p.codec!=DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AUTOMATIC && p.codec!=DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC_ELD) ||
         !playback_eld_configuration(config,size) ||
         (p.rate_mode && !playback_eld_variable(config))) return 0;
     uint32_t ceiling=playback_eld_bitrate(config);
@@ -50,7 +52,7 @@ static inline uint32_t playback_options_eld_rate(const uint8_t *config, unsigned
 }
 static inline bool playback_options_eld(const uint8_t *cap, unsigned size,
                                          playback_options_t p, uint8_t out[14]) {
-    if (!playback_options_valid(p) || (p.codec!=0 && p.codec!=3) ||
+    if (!playback_options_valid(p) || (p.codec!=DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AUTOMATIC && p.codec!=DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC_ELD) ||
         !playback_eld_negotiate(cap,size,out)) return false;
     uint32_t ceiling=playback_eld_bitrate(out);
     uint32_t rate=p.bitrate ? p.bitrate : ceiling;
@@ -70,7 +72,16 @@ static inline bool playback_options_eld_configuration(const uint8_t *p, unsigned
            playback_eld_bitrate(p)==options.bitrate;
 }
 
-enum { GAME_OFF, GAME_PENDING, GAME_SENT, GAME_CONFIRMED, GAME_FAILED, GAME_UNSUPPORTED, GAME_RESTORING };
+// Game Mode phases are published unchanged as the audio profile's game_mode_state.
+enum {
+    GAME_OFF=DONGLE_AUDIO_PROFILE_GAME_MODE_STATE_OFF,
+    GAME_PENDING=DONGLE_AUDIO_PROFILE_GAME_MODE_STATE_PENDING,
+    GAME_SENT=DONGLE_AUDIO_PROFILE_GAME_MODE_STATE_SENT,
+    GAME_CONFIRMED=DONGLE_AUDIO_PROFILE_GAME_MODE_STATE_CONFIRMED,
+    GAME_FAILED=DONGLE_AUDIO_PROFILE_GAME_MODE_STATE_FAILED,
+    GAME_UNSUPPORTED=DONGLE_AUDIO_PROFILE_GAME_MODE_STATE_UNSUPPORTED,
+    GAME_RESTORING=DONGLE_AUDIO_PROFILE_GAME_MODE_STATE_RESTORING,
+};
 typedef struct {
     bool requested, changed, failed, restore_failed, active;
     bool waiting_tx, waiting_report, low_latency_confirmed;

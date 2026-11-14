@@ -399,9 +399,9 @@ PRIVATE_UNLESS_HOST_TEST int setup_aaceld_configuration(){
 }
 
 int set_next_codec(uint8_t num){
-    if (media_session_playback_options().codec==1) return setup_sbc_configuration();
-    if (media_session_playback_options().codec==2) return setup_aac_configuration();
-    if (media_session_playback_options().codec==3) return setup_aaceld_configuration();
+    if (media_session_playback_options().codec==DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_SBC) return setup_sbc_configuration();
+    if (media_session_playback_options().codec==DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC) return setup_aac_configuration();
+    if (media_session_playback_options().codec==DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC_ELD) return setup_aaceld_configuration();
     //return 0;
     //return setup_sbc_configuration();
     switch (num){
@@ -450,13 +450,13 @@ bool playback_profile_preflight(playback_options_t next, const uint8_t peer[6]) 
         if (!remote_seps[i].have_media_codec_capabilities) { complete=false; break; }
         const uint8_t *event=remote_seps[i].media_codec_event;
         if (remote_seps[i].codec_type==AVDTP_CODEC_SBC) matching|=1u<<1;
-        else if (remote_seps[i].codec_type==AVDTP_CODEC_MPEG_2_4_AAC && next.codec==2) {
+        else if (remote_seps[i].codec_type==AVDTP_CODEC_MPEG_2_4_AAC && next.codec==DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC) {
             if (playback_options_aac_supported(next,
                 avdtp_subevent_signaling_media_codec_mpeg_aac_capability_get_object_type_bitmap(event),
                 avdtp_subevent_signaling_media_codec_mpeg_aac_capability_get_sampling_frequency_bitmap(event),
                 avdtp_subevent_signaling_media_codec_mpeg_aac_capability_get_channels_bitmap(event),
                 avdtp_subevent_signaling_media_codec_mpeg_aac_capability_get_bit_rate(event))) matching|=1u<<2;
-        } else if (remote_seps[i].codec_type==AVDTP_CODEC_NON_A2DP && next.codec==3 &&
+        } else if (remote_seps[i].codec_type==AVDTP_CODEC_NON_A2DP && next.codec==DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC_ELD &&
                    remote_seps[i].vendor_id==A2DP_CODEC_VENDOR_ID_APPLE &&
                    remote_seps[i].codec_id==A2DP_APPLE_CODEC_AAC_ELD) {
             uint8_t negotiated[PLAYBACK_ELD_CONFIG_SIZE];

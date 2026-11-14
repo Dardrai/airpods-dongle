@@ -8,8 +8,8 @@
 #include "../tinyusb/dongle_client.h"
 #include <limits.h>
 
-#define LEASE_MS 30000u
-#define RECENT_MS 90000u
+#define LEASE_MS ((unsigned)DONGLE_NEARBY_FINDER_LEASE_MILLISECONDS)
+#define RECENT_MS ((unsigned)DONGLE_NEARBY_FINDER_OLD_READING_AFTER_MILLISECONDS)
 static bool active,heard;
 static uint8_t owner,pair[6],irk[16];
 static uint32_t session,matches;
@@ -22,7 +22,7 @@ static seen_t seen[BLE_SCAN_CACHE_SIZE];
 
 static void clear_readings(void) {
     reading_count=reading_next=history_count=history_next=0;
-    smoothed=INT32_MIN;
+    smoothed=DONGLE_NEARBY_FINDER_SMOOTHED_RSSI_UNKNOWN;
 }
 static void clear(void) {
     active=heard=false;matches=0;clear_readings();memset(seen,0,sizeof(seen));
@@ -92,7 +92,7 @@ static void observe(const ble_scan_report_t *r,unsigned slot,void *context) {
         while(j && sorted[j-1]>value){sorted[j]=sorted[j-1];--j;}sorted[j]=value;
     }
     int32_t median=(int32_t)sorted[reading_count/2]*256;
-    smoothed=smoothed==INT32_MIN?median:(smoothed*7+median*3)/10;
+    smoothed=smoothed==DONGLE_NEARBY_FINDER_SMOOTHED_RSSI_UNKNOWN?median:(smoothed*7+median*3)/10;
     history[history_next]=smoothed;history_next=(history_next+1)%5;
     if(history_count<5)++history_count;
     heard=true;heard_at=r->received_ms;++matches;
@@ -111,21 +111,29 @@ void dongle_finder_poll(void) {
     ble_scan_visit(observe,&now);
 }
 uint16_t dongle_finder_snapshot(uint8_t client,uint8_t *out,uint16_t cap) {
-    if(!out || cap<24 || client>=DONGLE_CLIENT_COUNT || (active && owner!=client))return 0;
+    if(!out || cap<DONGLE_NEARBY_FINDER_SIZE || client>=DONGLE_CLIENT_COUNT || (active && owner!=client))return 0;
     uint64_t now=dongle_uptime_ms();
     if(active)lease=now;
     uint8_t address[6],key[16];bool identity=selected_key(address,key);memset(key,0,sizeof(key));
     ble_scan_stats_t stats;ble_scan_get_stats(&stats);
-    memset(out,0,24);out[0]=1;
+    memset(out,0,DONGLE_NEARBY_FINDER_SIZE);out[DONGLE_NEARBY_FINDER_OFFSET_VERSION]=DONGLE_NEARBY_FINDER_VERSION;
     uint64_t age=heard?now-heard_at:UINT64_MAX;
-    out[1]=!active?0:stats.pause_reasons?4:!heard?1:age>RECENT_MS?3:2;
-    if(identity)out[1]|=0x80;
-    out[2]=heard?(uint8_t)readings[(reading_next+6)%7]:127;
+    uint8_t *state=out+DONGLE_NEARBY_FINDER_OFFSET_STATE;
+    *state=!active?DONGLE_NEARBY_FINDER_STATE_STOPPED:stats.pause_reasons?DONGLE_NEARBY_FINDER_STATE_PAUSED:
+        !heard?DONGLE_NEARBY_FINDER_STATE_LISTENING:age>RECENT_MS?DONGLE_NEARBY_FINDER_STATE_OLD_READING:
+        DONGLE_NEARBY_FINDER_STATE_HEARD;
+    if(identity)*state|=DONGLE_NEARBY_FINDER_IDENTITY_AVAILABLE_FLAG;
+    out[DONGLE_NEARBY_FINDER_OFFSET_RSSI]=heard?(uint8_t)readings[(reading_next+6)%7]:DONGLE_NEARBY_FINDER_RSSI_UNKNOWN;
     if(active && !stats.pause_reasons && age<=10000 && history_count==5){
         int32_t delta=smoothed-history[history_next];
-        out[3]=delta>=768?1:delta<=-768?3:2;
+        out[DONGLE_NEARBY_FINDER_OFFSET_TREND]=delta>=768?DONGLE_NEARBY_FINDER_TREND_STRONGER:
+            delta<=-768?DONGLE_NEARBY_FINDER_TREND_WEAKER:DONGLE_NEARBY_FINDER_TREND_STEADY;
     }
-    dongle_put32(out+4,heard?dongle_age_ms(now,heard_at):UINT32_MAX);dongle_put32(out+8,matches);dongle_put32(out+12,stats.pause_reasons);
-    dongle_put32(out+16,session);dongle_put32(out+20,(uint32_t)smoothed);
-    return 24;
+    dongle_put32(out+DONGLE_NEARBY_FINDER_OFFSET_LAST_HEARD_AGE_MILLISECONDS,
+        heard?dongle_age_ms(now,heard_at):DONGLE_NEARBY_FINDER_AGE_UNKNOWN);
+    dongle_put32(out+DONGLE_NEARBY_FINDER_OFFSET_MATCHED_REPORTS,matches);
+    dongle_put32(out+DONGLE_NEARBY_FINDER_OFFSET_PAUSE_FLAGS,stats.pause_reasons);
+    dongle_put32(out+DONGLE_NEARBY_FINDER_OFFSET_SESSION,session);
+    dongle_put32(out+DONGLE_NEARBY_FINDER_OFFSET_SMOOTHED_RSSI,(uint32_t)smoothed);
+    return DONGLE_NEARBY_FINDER_SIZE;
 }

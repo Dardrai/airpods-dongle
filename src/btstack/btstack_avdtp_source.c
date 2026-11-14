@@ -2071,7 +2071,7 @@ static void delay_report_received(uint8_t *packet, uint16_t size) {
 static void sbc_configuration_received(uint8_t *packet, uint16_t size) {
     aaceld_variable_allowed = false;
     if (size < 18) return;
-    if (playback_options.codec && playback_options.codec!=1) { playback_encoder_failed(&media_tracker); return; }
+    if (playback_options.codec && playback_options.codec!=DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_SBC) { playback_encoder_failed(&media_tracker); return; }
     printf("Set configuration and init encoder\n");
     avdtp_media_codec_configuration_sbc_t sbc_configuration;
     sbc_configuration.reconfigure = avdtp_subevent_signaling_media_codec_sbc_configuration_get_reconfigure(packet);
@@ -2137,7 +2137,7 @@ static void aac_configuration_received(uint8_t *packet, uint16_t size) {
     aaceld_variable_allowed = false;
     if (size < 18) return;
     if (!a2dp_codec_configuration_aac_offered()) return;
-    if (playback_options.codec && playback_options.codec!=2) { playback_encoder_failed(&media_tracker); return; }
+    if (playback_options.codec && playback_options.codec!=DONGLE_AUDIO_PROFILE_REQUESTED_CODEC_AAC) { playback_encoder_failed(&media_tracker); return; }
     uint32_t rate = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_sampling_frequency(packet);
     uint8_t channels = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_num_channels(packet);
     uint8_t object = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_object_type(packet);
@@ -2634,7 +2634,10 @@ void set_next_capablity_and_start_stream(void) {
     finish_scan_avdtp_codec = true;
 }
 
-static uint8_t playback_input(void) { return is_usb_streaming ? 1 : (phone_active || call_active) ? 2 : 0; }
+static uint8_t playback_input(void) {
+    return is_usb_streaming ? DONGLE_INPUT_OWNERSHIP_USB :
+        (phone_active || call_active) ? DONGLE_INPUT_OWNERSHIP_PHONE : DONGLE_INPUT_OWNERSHIP_IDLE;
+}
 uint8_t dongle_playback_configure(uint8_t codec, uint8_t rate_mode, uint32_t bitrate) {
     playback_options_t next={codec,rate_mode,bitrate};
     if (!playback_options_valid(next)) return DONGLE_UNSUPPORTED;
@@ -2937,15 +2940,26 @@ uint16_t dongle_playback_adaptive_snapshot(uint8_t *out, uint16_t capacity) {
     return 64;
 }
 uint16_t dongle_playback_status(uint8_t *out, uint16_t capacity) {
-    if (!out || capacity<20) return 0;
-    memset(out,0,20); out[0]=1; out[1]=playback_options.codec; out[2]=dongle_output_codec();
-    out[3]=playback_options.rate_mode; dongle_put32(out+4,playback_options.bitrate);
-    dongle_put32(out+8,actual_bitrate); out[12]=playback_game.requested; out[13]=playback_game.phase;
-    out[14]=playback_input();
-    out[15]=(profile_pending ? 1 : 0) | (media_tracker.streaming ? 2 : 0) |
-        ((aacp_mic_requested() || aacp_mic_active()) ? 4 : 0) | (playback_game_eligible() ? 8 : 0);
-    out[16]=(uint8_t)reported_delay; out[17]=(uint8_t)(reported_delay>>8); out[18]=100;
-    return 20;
+    if (!out || capacity<DONGLE_AUDIO_PROFILE_SIZE) return 0;
+    memset(out,0,DONGLE_AUDIO_PROFILE_SIZE);
+    out[DONGLE_AUDIO_PROFILE_OFFSET_VERSION]=DONGLE_AUDIO_PROFILE_VERSION;
+    out[DONGLE_AUDIO_PROFILE_OFFSET_REQUESTED_CODEC]=playback_options.codec;
+    out[DONGLE_AUDIO_PROFILE_OFFSET_ACTUAL_CODEC]=dongle_output_codec();
+    out[DONGLE_AUDIO_PROFILE_OFFSET_RATE_MODE]=playback_options.rate_mode;
+    dongle_put32(out+DONGLE_AUDIO_PROFILE_OFFSET_REQUESTED_BITRATE,playback_options.bitrate);
+    dongle_put32(out+DONGLE_AUDIO_PROFILE_OFFSET_ACTUAL_BITRATE,actual_bitrate);
+    out[DONGLE_AUDIO_PROFILE_OFFSET_GAME_MODE_REQUESTED]=playback_game.requested;
+    out[DONGLE_AUDIO_PROFILE_OFFSET_GAME_MODE_STATE]=playback_game.phase;
+    out[DONGLE_AUDIO_PROFILE_OFFSET_INPUT_OWNERSHIP]=playback_input();
+    out[DONGLE_AUDIO_PROFILE_OFFSET_FLAGS]=(profile_pending ? DONGLE_AUDIO_PROFILE_FLAG_PROFILE_PENDING : 0) |
+        (media_tracker.streaming ? DONGLE_AUDIO_PROFILE_FLAG_STREAMING : 0) |
+        ((aacp_mic_requested() || aacp_mic_active()) ? DONGLE_AUDIO_PROFILE_FLAG_MICROPHONE : 0) |
+        (playback_game_eligible() ? DONGLE_AUDIO_PROFILE_FLAG_GAME_MODE_SUPPORTED : 0);
+    // reported_delay is UINT16_MAX until a report arrives, which is the protocol's unknown delay.
+    out[DONGLE_AUDIO_PROFILE_OFFSET_DELAY_TENTHS_MILLISECONDS]=(uint8_t)reported_delay;
+    out[DONGLE_AUDIO_PROFILE_OFFSET_DELAY_TENTHS_MILLISECONDS+1]=(uint8_t)(reported_delay>>8);
+    out[DONGLE_AUDIO_PROFILE_OFFSET_STARTUP_PRIMING_MILLISECONDS]=DONGLE_AUDIO_PROFILE_STARTUP_PRIMING_MILLISECONDS;
+    return DONGLE_AUDIO_PROFILE_SIZE;
 }
 uint16_t dongle_playback_inspect(uint8_t *out,uint16_t capacity) {
 #ifdef HAVE_AAC_FDK
@@ -2967,28 +2981,39 @@ void dongle_playback_inspect_enable(bool enabled) {
     critical_section_exit(&playback_pcm_lock);
 }
 uint16_t dongle_playback_diagnostics(uint8_t *out, uint16_t capacity) {
-    if (!out || capacity<64) return 0;
-    memset(out,0,64); out[0]=1; out[1]=playback_input(); out[2]=dongle_output_codec();
-    out[3]=(media_tracker.streaming ? 1 : 0) | ((aacp_mic_requested() || aacp_mic_active()) ? 2 : 0) |
-        (phone_sink_connected() ? 4 : 0) | (aacp_control_ready() ? 8 : 0);
-    dongle_put32(out+4,btstack_run_loop_get_time_ms());
+    if (!out || capacity<DONGLE_PERFORMANCE_SIZE) return 0;
+    memset(out,0,DONGLE_PERFORMANCE_SIZE);
+    out[DONGLE_PERFORMANCE_OFFSET_VERSION]=DONGLE_PERFORMANCE_VERSION;
+    out[DONGLE_PERFORMANCE_OFFSET_INPUT_OWNERSHIP]=playback_input();
+    out[DONGLE_PERFORMANCE_OFFSET_ACTUAL_CODEC]=dongle_output_codec();
+    out[DONGLE_PERFORMANCE_OFFSET_FLAGS]=(media_tracker.streaming ? DONGLE_PERFORMANCE_FLAG_STREAMING : 0) |
+        ((aacp_mic_requested() || aacp_mic_active()) ? DONGLE_PERFORMANCE_FLAG_MICROPHONE : 0) |
+        (phone_sink_connected() ? DONGLE_PERFORMANCE_FLAG_PHONE_CONNECTED : 0) |
+        (aacp_control_ready() ? DONGLE_PERFORMANCE_FLAG_AACP_READY : 0);
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_UPTIME_MILLISECONDS,btstack_run_loop_get_time_ms());
     if (playback_pcm_initialized) {
         critical_section_enter_blocking(&playback_pcm_lock);
-        dongle_put32(out+8,playback_pcm.used); dongle_put32(out+12,playback_pcm.capacity);
-        dongle_put32(out+16,playback_metrics.pcm_peak); dongle_put32(out+20,playback_metrics.pcm_underflows);
-        dongle_put32(out+24,playback_metrics.pcm_drops);
+        dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_PCM_FRAMES_USED,playback_pcm.used);
+        dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_PCM_FRAMES_CAPACITY,playback_pcm.capacity);
+        dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_PCM_FRAMES_HIGH_WATER_MARK,playback_metrics.pcm_peak);
+        dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_PCM_UNDERFLOW_FRAMES,playback_metrics.pcm_underflows);
+        dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_PCM_DROPPED_FRAMES,playback_metrics.pcm_drops);
         critical_section_exit(&playback_pcm_lock);
     }
-    dongle_put32(out+28,playback_metrics.encoded_units); dongle_put32(out+32,playback_metrics.encoder_last_us);
-    dongle_put32(out+36,playback_metrics.encoder_max_us); dongle_put32(out+40,playback_metrics.send_failures);
-    dongle_put32(out+44,playback_metrics.recoveries);
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_ENCODED_UNITS,playback_metrics.encoded_units);
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_LAST_ENCODE_MICROSECONDS,playback_metrics.encoder_last_us);
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_MAXIMUM_ENCODE_MICROSECONDS,playback_metrics.encoder_max_us);
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_SEND_FAILURES,playback_metrics.send_failures);
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_RECOVERY_REQUESTS,playback_metrics.recoveries);
     extern char end[], __StackLimit[];
     uint32_t heap=(uint32_t)((uintptr_t)__StackLimit-(uintptr_t)end);
     struct mallinfo allocations=mallinfo();
-    dongle_put32(out+48,heap); dongle_put32(out+52,(uint32_t)allocations.uordblks);
-    dongle_put32(out+56,(uint32_t)allocations.uordblks<=heap ? heap-(uint32_t)allocations.uordblks : UINT32_MAX);
-    dongle_put32(out+60,(uint32_t)allocations.arena);
-    return 64;
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_LINKED_HEAP_CAPACITY,heap);
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_HEAP_ALLOCATED_BYTES,(uint32_t)allocations.uordblks);
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_HEAP_REMAINING_BYTES,(uint32_t)allocations.uordblks<=heap ?
+        heap-(uint32_t)allocations.uordblks : DONGLE_PERFORMANCE_UNAVAILABLE);
+    dongle_put32(out+DONGLE_PERFORMANCE_OFFSET_ALLOCATOR_ARENA_BYTES,(uint32_t)allocations.arena);
+    return DONGLE_PERFORMANCE_SIZE;
 }
 
 void dongle_playback_usb_packet(uint32_t us, uint16_t frames, uint8_t format, uint8_t error) {

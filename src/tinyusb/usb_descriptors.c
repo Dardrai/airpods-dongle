@@ -27,6 +27,7 @@
 #include "bsp/board_api.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
+#include "dongle_protocol_spec.h"
 
 /* A combination of interfaces must have a unique product id, since PC will save device driver after the first plug.
  * Same VID/PID with different interface e.g MSC (first), then CDC (later) will possibly cause system error on PC.
@@ -37,6 +38,10 @@
 #define _PID_MAP(itf, n)  ( (CFG_TUD_##itf) << (n) )
 #define USB_PID           (0x4000 | _PID_MAP(CDC, 0) | _PID_MAP(MSC, 1) | _PID_MAP(HID, 2) | \
     _PID_MAP(MIDI, 3) | _PID_MAP(AUDIO, 4) | _PID_MAP(VENDOR, 5) )
+// The control protocol publishes both identities; clients find the dongle by them.
+_Static_assert(USB_PID == DONGLE_USB_PRODUCT_ID_AUDIO, "audio product id differs from the protocol spec");
+_Static_assert((USB_PID & ~(1u << 4)) == DONGLE_USB_PRODUCT_ID_CONTROL_ONLY,
+               "control-only product id differs from the protocol spec");
 
 //--------------------------------------------------------------------+
 // Device Descriptors
@@ -54,8 +59,8 @@ tusb_desc_device_t const desc_device =
     .bDeviceProtocol    = MISC_PROTOCOL_IAD,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
 
-    .idVendor           = 0xCafe,
-    .idProduct          = USB_PID,
+    .idVendor           = DONGLE_USB_VENDOR_ID,
+    .idProduct          = DONGLE_USB_PRODUCT_ID_AUDIO,
     .bcdDevice          = 0x0100,
 
     .iManufacturer      = 0x01,
@@ -75,8 +80,8 @@ tusb_desc_device_t const desc_device_control =
     .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
     .bDeviceProtocol    = MISC_PROTOCOL_IAD,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
-    .idVendor           = 0xCafe,
-    .idProduct          = USB_PID & ~(1u << 4),
+    .idVendor           = DONGLE_USB_VENDOR_ID,
+    .idProduct          = DONGLE_USB_PRODUCT_ID_CONTROL_ONLY,
     .bcdDevice          = 0x0100,
     .iManufacturer      = 0x01,
     .iProduct           = 0x02,
@@ -149,16 +154,16 @@ uint8_t const * tud_descriptor_device_cb(void)
 // Separate top-level collections: Windows media keys and NTPods controls.
 static const uint8_t desc_hid_report[] = {
     TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(1)),
-    0x06, 0x31, 0xff, // Usage Page (vendor FF31)
-    0x09, 0x01,       // Usage 1
-    0xa1, 0x01,       // Application collection
-    0x85, 0x02,       // Report ID 2
-    0x15, 0x00, 0x26, 0xff, 0x00, // Logical 0..255
-    0x75, 0x08, 0x95, 0x3f,       // 63 bytes + report ID
-    0x09, 0x01, 0xb1, 0x02,       // Feature (Data, Variable, Absolute)
-    0x85, 0x03,                   // Report ID 3: bounded settings transactions
-    0x09, 0x02, 0xb1, 0x02,
-    0xc0
+    HID_USAGE_PAGE_N(DONGLE_USB_VENDOR_USAGE_PAGE, 2),    // Usage Page (vendor FF31)
+    HID_USAGE(DONGLE_USB_VENDOR_USAGE),
+    HID_COLLECTION(HID_COLLECTION_APPLICATION),
+    HID_REPORT_ID(DONGLE_REPORT_ID)                       // Report 2: commands and status
+    HID_LOGICAL_MIN(0x00), HID_LOGICAL_MAX_N(0xff, 2),    // Logical 0..255
+    HID_REPORT_SIZE(DONGLE_USB_REPORT_SIZE_BITS), HID_REPORT_COUNT(DONGLE_USB_REPORT_COUNT), // 63 bytes + report ID
+    HID_USAGE(DONGLE_USB_REPORT_USAGE_CONTROL), HID_FEATURE(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+    HID_REPORT_ID(DONGLE_RPC_REPORT_ID)                   // Report 3: bounded settings transactions
+    HID_USAGE(DONGLE_USB_REPORT_USAGE_RPC), HID_FEATURE(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+    HID_COLLECTION_END
 };
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) {

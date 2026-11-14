@@ -5,8 +5,8 @@
 #include "../tinyusb/dongle_client.h"
 #include "../tinyusb/dongle_protocol.h"
 
-#define VOLUME_AUTHORITY_TTL_MS 5000u
-#define VOLUME_AUTHORITY_SNAPSHOT_SIZE 24u
+#define VOLUME_AUTHORITY_TTL_MS ((uint32_t)DONGLE_VOLUME_AUTHORITY_LEASE_MILLISECONDS)
+#define VOLUME_AUTHORITY_SNAPSHOT_SIZE DONGLE_PHYSICAL_VOLUME_SIZE
 
 typedef struct {
     uint32_t usb_generation, control_generation;
@@ -65,16 +65,30 @@ static inline bool volume_authority_disconnect(volume_authority_t *s,uint8_t cli
     return true;
 }
 
+// Acquire carries no token; every other action carries one. Only set_level carries a level.
+static inline bool volume_authority_arguments_valid(uint8_t action,uint32_t token,uint8_t level) {
+    return action<=DONGLE_VOLUME_AUTHORITY_ACTION_SET_LEVEL && level<=DONGLE_PHYSICAL_VOLUME_MAXIMUM_LEVEL &&
+        (action==DONGLE_VOLUME_AUTHORITY_ACTION_SET_LEVEL || !level) &&
+        (action==DONGLE_VOLUME_AUTHORITY_ACTION_ACQUIRE ? !token : token!=0);
+}
+
+// The whole feature 17 request: size, feature byte and arguments.
+static inline bool volume_authority_request_valid(const uint8_t *p,uint16_t size) {
+    return p && size==DONGLE_VOLUME_AUTHORITY_REQUEST_SIZE &&
+        p[DONGLE_VOLUME_AUTHORITY_OFFSET_FEATURE]==DONGLE_FEATURE_USB_HOST_VOLUME_AUTHORITY &&
+        volume_authority_arguments_valid(p[DONGLE_VOLUME_AUTHORITY_OFFSET_ACTION],
+            dongle_u32(p+DONGLE_VOLUME_AUTHORITY_OFFSET_TOKEN),p[DONGLE_VOLUME_AUTHORITY_OFFSET_LEVEL]);
+}
+
 // Poll revocation before managing a valid request; malformed requests change nothing.
 static inline uint8_t volume_authority_manage(volume_authority_t *s,uint8_t client,
                                               const volume_authority_scope_t *scope,
                                               uint8_t action,uint32_t token,uint8_t level,
                                               uint32_t now) {
-    if (action>3 || level>127 || (action!=3 && level) || (!action && token) ||
-        (action && !token)) return DONGLE_MALFORMED;
+    if (!volume_authority_arguments_valid(action,token,level)) return DONGLE_MALFORMED;
     if (client!=DONGLE_CLIENT_USB) return DONGLE_UNSUPPORTED;
     if (!volume_authority_scope_ready(scope)) return DONGLE_DISCONNECTED;
-    if (!action) {
+    if (action==DONGLE_VOLUME_AUTHORITY_ACTION_ACQUIRE) {
         if (s->active) return DONGLE_BUSY;
         if (!++s->serial) ++s->serial;
         s->scope=*scope; s->client=client; s->token=s->serial;
@@ -82,7 +96,7 @@ static inline uint8_t volume_authority_manage(volume_authority_t *s,uint8_t clie
         return DONGLE_ACCEPTED;
     }
     if (!volume_authority_owner(s,client,scope,now) || token!=s->token) return DONGLE_STALE;
-    if (action==2) { s->active=false; s->token=0; }
+    if (action==DONGLE_VOLUME_AUTHORITY_ACTION_RELEASE) { s->active=false; s->token=0; }
     else s->deadline=now+VOLUME_AUTHORITY_TTL_MS;
     return DONGLE_ACCEPTED;
 }

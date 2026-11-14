@@ -134,40 +134,45 @@ uint16_t dongle_volume_snapshot(uint8_t client,uint8_t *out,uint16_t capacity) {
     bool active=volume_authority_current(&usb_host_volume,&scope,now);
     bool observed=sink_volume.selected && sink_volume.known && !usb_volume_relay.readback_pending;
     memset(out,0,VOLUME_AUTHORITY_SNAPSHOT_SIZE);
-    out[0]=1;
-    out[1]=(observed ? 1 : 0) |
-        (sink_volume.pending ? 2 : 0) | (sink_volume.inflight ? 4 : 0) |
-        (active ? 8 : 0) | (volume_authority_scope_ready(&scope) ? 16 : 0);
-    out[2]=observed ? sink_volume.confirmed : 255;
-    out[3]=sink_volume.pending || sink_volume.inflight ? sink_volume.desired : 255;
-    dongle_put32(out+4,volume_observation_revision);
+    out[DONGLE_PHYSICAL_VOLUME_OFFSET_VERSION]=DONGLE_PHYSICAL_VOLUME_VERSION;
+    out[DONGLE_PHYSICAL_VOLUME_OFFSET_FLAGS]=(observed ? DONGLE_PHYSICAL_VOLUME_FLAG_KNOWN_PHYSICAL_GAIN : 0) |
+        (sink_volume.pending ? DONGLE_PHYSICAL_VOLUME_FLAG_PENDING_REQUEST : 0) |
+        (sink_volume.inflight ? DONGLE_PHYSICAL_VOLUME_FLAG_IN_FLIGHT_REQUEST : 0) |
+        (active ? DONGLE_PHYSICAL_VOLUME_FLAG_ACTIVE_AUTHORITY : 0) |
+        (volume_authority_scope_ready(&scope) ? DONGLE_PHYSICAL_VOLUME_FLAG_ELIGIBLE_USB_SCOPE : 0);
+    out[DONGLE_PHYSICAL_VOLUME_OFFSET_CONFIRMED_LEVEL]=observed ? sink_volume.confirmed : DONGLE_PHYSICAL_VOLUME_LEVEL_UNKNOWN;
+    out[DONGLE_PHYSICAL_VOLUME_OFFSET_DESIRED_LEVEL]=sink_volume.pending || sink_volume.inflight ?
+        sink_volume.desired : DONGLE_PHYSICAL_VOLUME_LEVEL_UNKNOWN;
+    dongle_put32(out+DONGLE_PHYSICAL_VOLUME_OFFSET_OBSERVATION_REVISION,volume_observation_revision);
     if (volume_authority_owner(&usb_host_volume,client,&scope,now))
-        dongle_put32(out+8,usb_host_volume.token);
-    dongle_put32(out+12,volume_authority_remaining(&usb_host_volume,&scope,now));
-    dongle_put32(out+16,scope.usb_generation);
+        dongle_put32(out+DONGLE_PHYSICAL_VOLUME_OFFSET_AUTHORITY_TOKEN,usb_host_volume.token);
+    dongle_put32(out+DONGLE_PHYSICAL_VOLUME_OFFSET_REMAINING_LEASE_MILLISECONDS,
+        volume_authority_remaining(&usb_host_volume,&scope,now));
+    dongle_put32(out+DONGLE_PHYSICAL_VOLUME_OFFSET_USB_MEDIA_GENERATION,scope.usb_generation);
     return VOLUME_AUTHORITY_SNAPSHOT_SIZE;
 }
 uint8_t dongle_volume_request(uint8_t client,const uint8_t *p,uint16_t size,
                               uint8_t *out,uint16_t capacity,uint16_t *length) {
-    if (!p || size!=7 || p[0]!=17 || !out || !length || capacity<VOLUME_AUTHORITY_SNAPSHOT_SIZE ||
-        p[1]>3 || p[6]>127 || (p[1]!=3 && p[6]) ||
-        (!p[1] && dongle_u32(p+2)) || (p[1] && !dongle_u32(p+2))) return DONGLE_MALFORMED;
+    if (!volume_authority_request_valid(p,size) || !out || !length ||
+        capacity<VOLUME_AUTHORITY_SNAPSHOT_SIZE) return DONGLE_MALFORMED;
+    uint8_t action=p[DONGLE_VOLUME_AUTHORITY_OFFSET_ACTION],level=p[DONGLE_VOLUME_AUTHORITY_OFFSET_LEVEL];
+    uint32_t token=dongle_u32(p+DONGLE_VOLUME_AUTHORITY_OFFSET_TOKEN);
     if (client!=DONGLE_CLIENT_USB) return DONGLE_UNSUPPORTED;
     bt_volume_authority_poll();
     volume_authority_scope_t scope=bt_volume_authority_scope();
     if (!volume_authority_scope_ready(&scope)) return DONGLE_DISCONNECTED;
-    if (!p[1] && (sink_volume.pending || sink_volume.inflight || !sink_volume.known ||
-                  usb_volume_relay.readback_pending)) return DONGLE_BUSY;
-    uint8_t result=volume_authority_manage(&usb_host_volume,client,&scope,p[1],
-        dongle_u32(p+2),p[6],btstack_run_loop_get_time_ms());
+    if (action==DONGLE_VOLUME_AUTHORITY_ACTION_ACQUIRE && (sink_volume.pending || sink_volume.inflight ||
+            !sink_volume.known || usb_volume_relay.readback_pending)) return DONGLE_BUSY;
+    uint8_t result=volume_authority_manage(&usb_host_volume,client,&scope,action,
+        token,level,btstack_run_loop_get_time_ms());
     if (result!=DONGLE_ACCEPTED) return result;
-    if (!p[1]) {
+    if (action==DONGLE_VOLUME_AUTHORITY_ACTION_ACQUIRE) {
         bt_volume_relay_reset(true);
         host_volume_quiet=false;
         _bt_sink_volume_changed=false;
-    } else if (p[1]==2) bt_volume_host_end();
-    else if (p[1]==3) {
-        (void)volume_sync_request(&sink_volume,p[6],false,btstack_run_loop_get_time_ms());
+    } else if (action==DONGLE_VOLUME_AUTHORITY_ACTION_RELEASE) bt_volume_host_end();
+    else if (action==DONGLE_VOLUME_AUTHORITY_ACTION_SET_LEVEL) {
+        (void)volume_sync_request(&sink_volume,level,false,btstack_run_loop_get_time_ms());
         host_volume_write=sink_volume.pending;
     }
     *length=dongle_volume_snapshot(client,out,capacity);

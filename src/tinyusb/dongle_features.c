@@ -8,6 +8,7 @@
 #include "../btstack/dongle_finder.h"
 #include "../btstack/btstack_ble_scan.h"
 #include "../btstack/phone_sink.h"
+#include "../btstack/volume_authority.h"
 
 static uint16_t radio_snapshot(uint8_t *out,uint16_t capacity) {
     if(capacity<128)return 0;
@@ -79,20 +80,23 @@ uint8_t dongle_features_request(uint8_t client,const uint8_t *p,uint16_t size,
             *length=size==2 ? aacp_settings_snapshot_extended(out,capacity) : aacp_settings_snapshot(out,capacity);
             return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
         case DONGLE_FEATURE_CONFIGURE_AUDIO_PROFILE:
-            if(size!=7 || capacity<20)return DONGLE_RPC_ERROR_MALFORMED;
-            result=dongle_playback_configure(p[1],p[2],dongle_u32(p+3));
+            if(size!=DONGLE_CONFIGURE_AUDIO_PROFILE_REQUEST_SIZE || capacity<DONGLE_AUDIO_PROFILE_SIZE)return DONGLE_RPC_ERROR_MALFORMED;
+            result=dongle_playback_configure(p[DONGLE_CONFIGURE_AUDIO_PROFILE_OFFSET_REQUESTED_CODEC],
+                p[DONGLE_CONFIGURE_AUDIO_PROFILE_OFFSET_RATE_MODE],
+                dongle_u32(p+DONGLE_CONFIGURE_AUDIO_PROFILE_OFFSET_REQUESTED_BITRATE));
             if(result!=DONGLE_ACCEPTED)return error(result);
             *length=dongle_playback_status(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
         case DONGLE_FEATURE_SET_GAME_MODE:
-            if(size!=2 || p[1]>1 || capacity<20)return DONGLE_RPC_ERROR_MALFORMED;
-            result=dongle_playback_game_mode(p[1]!=0);
+            if(size!=DONGLE_SET_GAME_MODE_REQUEST_SIZE || p[DONGLE_SET_GAME_MODE_OFFSET_ENABLED]>DONGLE_SET_GAME_MODE_MAXIMUM_ENABLED ||
+                capacity<DONGLE_AUDIO_PROFILE_SIZE)return DONGLE_RPC_ERROR_MALFORMED;
+            result=dongle_playback_game_mode(p[DONGLE_SET_GAME_MODE_OFFSET_ENABLED]!=0);
             if(result!=DONGLE_ACCEPTED)return error(result);
             *length=dongle_playback_status(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
         case DONGLE_FEATURE_READ_PERFORMANCE:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=dongle_playback_diagnostics(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
         case DONGLE_FEATURE_START_NEARBY_FINDER:
-            if(size!=1 || capacity<24)return DONGLE_RPC_ERROR_MALFORMED;
+            if(size!=1 || capacity<DONGLE_NEARBY_FINDER_SIZE)return DONGLE_RPC_ERROR_MALFORMED;
             result=dongle_finder_start(client);
             if(result!=DONGLE_ACCEPTED)return error(result);
             *length=dongle_finder_snapshot(client,out,capacity);return *length?0:DONGLE_RPC_ERROR_BUSY;
@@ -121,11 +125,11 @@ uint8_t dongle_features_request(uint8_t client,const uint8_t *p,uint16_t size,
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=phone_sink_diagnostics(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
         case DONGLE_FEATURE_READ_PHYSICAL_VOLUME:
-            if(size!=1 || capacity<24)return DONGLE_RPC_ERROR_MALFORMED;
+            if(size!=1 || capacity<DONGLE_PHYSICAL_VOLUME_SIZE)return DONGLE_RPC_ERROR_MALFORMED;
             *length=dongle_volume_snapshot(client,out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
         case DONGLE_FEATURE_USB_HOST_VOLUME_AUTHORITY:
-            if(size!=7 || capacity<24 || p[1]>3 || p[6]>127 || (p[1]!=3 && p[6]) ||
-                (!p[1] && dongle_u32(p+2)) || (p[1] && !dongle_u32(p+2))) return DONGLE_RPC_ERROR_MALFORMED;
+            if(!volume_authority_request_valid(p,size) || capacity<DONGLE_PHYSICAL_VOLUME_SIZE)
+                return DONGLE_RPC_ERROR_MALFORMED;
             if(client!=DONGLE_CLIENT_USB)return DONGLE_RPC_ERROR_UNSUPPORTED;
             return error(dongle_volume_request(client,p,size,out,capacity,length));
         case DONGLE_FEATURE_DIAGNOSTIC_FLUSH_COMPARISON:
