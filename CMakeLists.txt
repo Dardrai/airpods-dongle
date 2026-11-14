@@ -71,6 +71,7 @@ add_executable(airpods_dongle
     src/btstack/bluetooth_volume.c
     src/btstack/avrcp_connection.c
     src/btstack/a2dp_codec_configuration.c
+    src/btstack/bluetooth_debug_console.c
     src/btstack/btstack_hci.c
     src/btstack/btstack_ble_scan.c
     src/btstack/btstack_aacp.c

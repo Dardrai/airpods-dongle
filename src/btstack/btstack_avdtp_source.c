@@ -86,6 +86,7 @@ _Static_assert(PHONE_PCM_CAPACITY <= PLAYBACK_PCM_FRAMES, "Phone jitter reserve 
 #include "media_session.h"
 #include "a2dp_codec_identifiers.h"
 #include "a2dp_codec_configuration.h"
+#include "bluetooth_debug_console.h"
 #include "../tinyusb/dongle_control.h"
 #include "btstack_resample.h"
 #include "../tinyusb/uac.h"
@@ -333,6 +334,7 @@ static void playback_prepare_packet(a2dp_media_sending_context_t *, uint32_t);
 static void playback_clock_accrue(a2dp_media_sending_context_t *,uint32_t);
 static void playback_clock_switch(a2dp_media_sending_context_t *,uint32_t,uint8_t,uint8_t);
 static void playback_adjust_cancel_stream(a2dp_media_sending_context_t *,uint32_t,uint8_t);
+
 static void a2dp_demo_send_media_packet(void) {
     a2dp_media_sending_context_t *context = &media_tracker;
     if (playback_encoder_busy()) return;
@@ -413,6 +415,9 @@ static void a2dp_demo_send_media_packet(void) {
     playback_work_pending=true;
 }
 
+// The debug console's manual send (media_session.h); the timer path calls the static function.
+void media_session_send_media_packet(void) { a2dp_demo_send_media_packet(); }
+
 static playback_pcm_t playback_pcm;
 static union {
     playback_resample_t resample;
@@ -451,6 +456,10 @@ uint8_t media_session_local_seid(void) { return media_tracker.local_seid; }
 void media_session_set_local_seid(uint8_t local_seid) { media_tracker.local_seid = local_seid; }
 uint8_t media_session_remote_seid(void) { return media_tracker.remote_seid; }
 void media_session_set_remote_seid(uint8_t remote_seid) { media_tracker.remote_seid = remote_seid; }
+uint8_t media_session_connect_signaling(void) {
+    return avdtp_source_connect((uint8_t *) get_device_addr(), &media_tracker.avdtp_cid);
+}
+void media_session_mark_local_command(void) { is_cmd_triggered_localy = 1; }
 static btstack_timer_source_t suspend_recovery_timer;
 static bool suspend_recovery_pending;
 static bool recovery_reset_encoder;
@@ -2420,149 +2429,6 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 
 
 
-#ifdef HAVE_BTSTACK_STDIN
-
-static void show_usage(void){
-    bd_addr_t      iut_address;
-    gap_local_bd_addr(iut_address);
-    printf("\n--- Bluetooth AVDTP SOURCE Test Console %s ---\n", bd_addr_to_str(iut_address));
-    printf("c      - create connection to addr %s\n", get_device_addr_string());
-    printf("C      - disconnect\n");
-    printf("D      - Delete linked list\n");
-    printf("z      - select remote endpoint\n");
-    printf("g      - set_next_capablity_and_start_stream  %u\n", media_tracker.remote_seid);
-    printf("a      - get all capabilities for remote seid %u\n", media_tracker.remote_seid);
-    printf("s      - set configuration    for remote seid %u\n", media_tracker.remote_seid);
-    printf("f      - get configuration    for remote seid %u\n", media_tracker.remote_seid);
-    printf("R      - reconfigure stream   for remote seid %u\n", media_tracker.remote_seid);
-    printf("o      - open stream          for remote seid %u\n", media_tracker.remote_seid);
-    printf("m      - start stream         for remote seid %u\n", media_tracker.remote_seid);
-    printf("A      - abort stream         for remote seid %u\n", media_tracker.remote_seid);
-    printf("S      - stop stream          for remote seid %u\n", media_tracker.remote_seid);
-    printf("P      - suspend stream       for remote seid %u\n", media_tracker.remote_seid);
-    printf("l      - set up ladc          for remote seid %u\n", media_tracker.remote_seid);
-    printf("u      - set up sbc           for remote seid %u\n", media_tracker.remote_seid);
-    printf("Ctrl-c - exit\n");
-    printf("---\n");
-}
-
-
-static void stdin_process(char cmd){
-    uint8_t status = ERROR_CODE_SUCCESS;
-    is_cmd_triggered_localy = 1;
-    static bool enter_remote_seid_index = false;
-
-    if (enter_remote_seid_index){
-        if ((cmd < '0') || (cmd > '9')) return;
-        uint8_t index = cmd - '0';
-        if (index >= a2dp_codec_configuration_remote_endpoint_count()){
-            printf("Index too high, try again\n");
-            return;
-        }
-        enter_remote_seid_index = false;
-        a2dp_codec_configuration_select_remote_endpoint(index);
-        printf("Selected Remote Stream Endpoint with SEID %u\n",  media_tracker.remote_seid);
-        return;
-    }
-
-    switch (cmd){
-        case 'c':
-            printf("Establish AVDTP Source connection to %s\n", get_device_addr_string());
-            status = avdtp_source_connect((uint8_t *) get_device_addr(), &media_tracker.avdtp_cid);
-            break;
-        case 'C':
-            printf("Disconnect AVDTP Source\n");
-            status = avdtp_source_disconnect(media_tracker.avdtp_cid);
-            break;
-        case 'D':
-            printf("Deleting all link keys\n");
-            gap_delete_all_link_keys();
-            printf("Finished\n");
-            break;
-        case 'g':
-            printf("set_next_capablity_and_start_stream with seid %d\n", media_tracker.remote_seid);
-            set_next_capablity_and_start_stream();
-            break;
-        case 'a':
-            printf("Get all capabilities of stream endpoint with seid %d\n", media_tracker.remote_seid);
-            status = avdtp_source_get_all_capabilities(media_tracker.avdtp_cid, media_tracker.remote_seid);
-            break;
-        case 'f':
-            printf("Get configuration of stream endpoint with seid %d\n", media_tracker.remote_seid);
-            status = avdtp_source_get_configuration(media_tracker.avdtp_cid, media_tracker.remote_seid);
-            break;
-        case 'z':
-            if (a2dp_codec_configuration_remote_endpoint_count() == 0){
-                printf("Remote Stream Endpoints not discovered yet, please discover stream endpoints first\n");
-                break;
-            }
-            a2dp_codec_configuration_print_remote_endpoints();
-            printf("Please enter index of remote stream endpoint:\n");
-            enter_remote_seid_index = true;
-            break;
-
-        case 's':{
-            //status = set_configuration();
-            break;
-        }
-        case 'R':
-            status = a2dp_codec_configuration_reconfigure_selected_endpoint();
-            break;
-        case 'o':
-            printf("Establish stream between local %d and remote %d seid\n", media_tracker.local_seid, media_tracker.remote_seid);
-            status = avdtp_source_open_stream(media_tracker.avdtp_cid, media_tracker.local_seid, media_tracker.remote_seid);
-            break;
-        case 'm':
-            printf("Start stream between local %d and remote %d seid, \n", media_tracker.local_seid, media_tracker.remote_seid);
-            status = avdtp_source_start_stream(media_tracker.avdtp_cid, media_tracker.local_seid);
-            break;
-        case 'A':
-            printf("Abort stream between local %d and remote %d seid\n", media_tracker.local_seid, media_tracker.remote_seid);
-            status = avdtp_source_abort_stream(media_tracker.avdtp_cid, media_tracker.local_seid);
-            break;
-        case 'S':
-            printf("Release stream between local %d and remote %d seid\n", media_tracker.local_seid, media_tracker.remote_seid);
-            status = avdtp_source_stop_stream(media_tracker.avdtp_cid, media_tracker.local_seid);
-            break;
-        case 'P':
-            printf("Susspend stream between local %d and remote %d seid\n", media_tracker.local_seid, media_tracker.remote_seid);
-            status = avdtp_source_suspend(media_tracker.avdtp_cid, media_tracker.local_seid);
-            break;
-        case 'X':
-            printf("Stop streaming\n");
-            status = (media_tracker.avdtp_cid, media_tracker.local_seid);
-            break;
-
-
-        case 'v':
-            increase_vol_by_key();
-            break;
-        case 'V':
-            decrease_vol_by_key();
-            break;
-
-        case 'p':
-            a2dp_demo_send_media_packet();
-            break;
-
-        case 'u':
-            printf("Setup SBC codec\n");
-            status = setup_sbc_configuration();
-            break;
-
-        case '\n':
-        case '\r':
-            break;
-        default:
-            show_usage();
-            break;
-
-    }
-    if (status != ERROR_CODE_SUCCESS){
-        printf("AVDTP Sink cmd \'%c\' failed, status 0x%02x\n", cmd, status);
-    }
-}
-#endif
 
 
 bool avdtp_disconnect_and_scan(void){
@@ -3183,7 +3049,7 @@ int btstack_main(int argc, const char * argv[]){
 
 
 #ifdef HAVE_BTSTACK_STDIN
-    btstack_stdin_setup(stdin_process);
+    bluetooth_debug_console_init();
 #endif
 
     // turn on!

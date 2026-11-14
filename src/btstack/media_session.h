@@ -33,6 +33,14 @@ void media_session_set_local_seid(uint8_t local_seid);
 uint8_t media_session_remote_seid(void);
 void media_session_set_remote_seid(uint8_t remote_seid);
 
+// Debug console commands (bluetooth_debug_console.c).
+// Open AVDTP signaling to the selected AirPods, storing the channel in the session.
+uint8_t media_session_connect_signaling(void);
+// The next AVDTP accept answers a console command; it is logged once.
+void media_session_mark_local_command(void);
+// Send the pending encoded media packet now.
+void media_session_send_media_packet(void);
+
 // Manual AirPods media buttons cancel pending automatic pause/play (owned by
 // the accessory automation in btstack_avdtp_source.c).
 void playback_accessory_cancel_automatic_media(void);
