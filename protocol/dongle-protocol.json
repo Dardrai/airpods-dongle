@@ -155,7 +155,8 @@
       {"result": "malformed", "error": "malformed"}
     ],
     "maximum_fragment_length": 42,
-    "maximum_payload_length": 512
+    "maximum_payload_length": 512,
+    "failure_error_payload_offset": 0
   },
   "phone_transport": {
     "uuid": "c6c4f8a0-6d47-4bd1-9b6a-415044470001",
@@ -218,6 +219,10 @@
   "settings_snapshot": {
     "version": 1,
     "header_size": 2,
+    "header": [
+      {"name": "version", "offset": 0, "size": 1},
+      {"name": "count", "offset": 1, "size": 1}
+    ],
     "record_size": 13,
     "record": [
       {"name": "identifier", "offset": 0, "size": 1},
@@ -370,5 +375,197 @@
   },
   "settings_lease_response_version": 1,
   "settings_lease_actions": [{"name": "acquire", "value": 0}, {"name": "renew", "value": 1}, {"name": "release", "value": 2}],
-  "cached_report_envelope_size": 8
+  "cached_report_envelope_size": 8,
+  "cached_report_envelope": [
+    {"name": "age_milliseconds", "offset": 0, "size": 4},
+    {"name": "revision", "offset": 4, "size": 4}
+  ],
+  "input_ownerships": [
+    {"name": "idle", "value": 0},
+    {"name": "usb", "value": 1},
+    {"name": "phone", "value": 2, "comment": "Phone music or a call."}
+  ],
+  "layouts": [
+    {
+      "name": "configure_audio_profile",
+      "comment": "Feature 3 request; answered with an audio_profile snapshot.",
+      "feature": "configure_audio_profile",
+      "request_size": 7,
+      "fields": [
+        {"name": "feature", "offset": 0, "size": 1},
+        {"name": "requested_codec", "offset": 1, "size": 1},
+        {"name": "rate_mode", "offset": 2, "size": 1},
+        {"name": "requested_bitrate", "offset": 3, "size": 4}
+      ]
+    },
+    {
+      "name": "set_game_mode",
+      "comment": "Feature 4 request; answered with an audio_profile snapshot.",
+      "feature": "set_game_mode",
+      "request_size": 2,
+      "fields": [
+        {"name": "feature", "offset": 0, "size": 1},
+        {"name": "enabled", "offset": 1, "size": 1}
+      ],
+      "constants": [{"name": "maximum_enabled", "value": 1}]
+    },
+    {
+      "name": "audio_profile",
+      "comment": "Response to features 3, 4 and 9. Bitrates are bits per second; actual_codec uses control.codecs.",
+      "version": 1,
+      "size": 20,
+      "fields": [
+        {"name": "version", "offset": 0, "size": 1},
+        {"name": "requested_codec", "offset": 1, "size": 1},
+        {"name": "actual_codec", "offset": 2, "size": 1},
+        {"name": "rate_mode", "offset": 3, "size": 1},
+        {"name": "requested_bitrate", "offset": 4, "size": 4},
+        {"name": "actual_bitrate", "offset": 8, "size": 4},
+        {"name": "game_mode_requested", "offset": 12, "size": 1},
+        {"name": "game_mode_state", "offset": 13, "size": 1},
+        {"name": "input_ownership", "offset": 14, "size": 1},
+        {"name": "flags", "offset": 15, "size": 1},
+        {"name": "delay_tenths_milliseconds", "offset": 16, "size": 2},
+        {"name": "startup_priming_milliseconds", "offset": 18, "size": 2}
+      ],
+      "groups": [
+        {"name": "requested_codec", "values": [
+          {"name": "automatic", "value": 0}, {"name": "sbc", "value": 1}, {"name": "aac", "value": 2}, {"name": "aac_eld", "value": 3}]},
+        {"name": "rate_mode", "values": [{"name": "constant_bitrate", "value": 0}, {"name": "variable_bitrate", "value": 1}]},
+        {"name": "game_mode_state", "values": [
+          {"name": "off", "value": 0}, {"name": "pending", "value": 1}, {"name": "sent", "value": 2}, {"name": "confirmed", "value": 3},
+          {"name": "failed", "value": 4}, {"name": "unsupported", "value": 5}, {"name": "restoring", "value": 6}]},
+        {"name": "flag", "flags": true, "values": [
+          {"name": "profile_pending", "value": 1}, {"name": "streaming", "value": 2}, {"name": "microphone", "value": 4},
+          {"name": "game_mode_supported", "value": 8}]}
+      ],
+      "constants": [
+        {"name": "delay_unknown", "value": 65535},
+        {"name": "startup_priming_milliseconds", "value": 100}
+      ]
+    },
+    {
+      "name": "performance",
+      "comment": "Response to feature 5. Counters accumulate from boot and wrap modulo 2^32.",
+      "version": 1,
+      "size": 64,
+      "fields": [
+        {"name": "version", "offset": 0, "size": 1},
+        {"name": "input_ownership", "offset": 1, "size": 1},
+        {"name": "actual_codec", "offset": 2, "size": 1},
+        {"name": "flags", "offset": 3, "size": 1},
+        {"name": "uptime_milliseconds", "offset": 4, "size": 4},
+        {"name": "pcm_frames_used", "offset": 8, "size": 4},
+        {"name": "pcm_frames_capacity", "offset": 12, "size": 4},
+        {"name": "pcm_frames_high_water_mark", "offset": 16, "size": 4},
+        {"name": "pcm_underflow_frames", "offset": 20, "size": 4},
+        {"name": "pcm_dropped_frames", "offset": 24, "size": 4},
+        {"name": "encoded_units", "offset": 28, "size": 4},
+        {"name": "last_encode_microseconds", "offset": 32, "size": 4},
+        {"name": "maximum_encode_microseconds", "offset": 36, "size": 4},
+        {"name": "send_failures", "offset": 40, "size": 4},
+        {"name": "recovery_requests", "offset": 44, "size": 4},
+        {"name": "linked_heap_capacity", "offset": 48, "size": 4},
+        {"name": "heap_allocated_bytes", "offset": 52, "size": 4},
+        {"name": "heap_remaining_bytes", "offset": 56, "size": 4},
+        {"name": "allocator_arena_bytes", "offset": 60, "size": 4}
+      ],
+      "groups": [
+        {"name": "flag", "flags": true, "values": [
+          {"name": "streaming", "value": 1}, {"name": "microphone", "value": 2}, {"name": "phone_connected", "value": 4},
+          {"name": "aacp_ready", "value": 8}]}
+      ],
+      "constants": [{"name": "unavailable", "value": 4294967295}]
+    },
+    {
+      "name": "nearby_finder",
+      "comment": "Response to features 6 and 7. The finder stops unless polled within its lease.",
+      "version": 1,
+      "size": 24,
+      "fields": [
+        {"name": "version", "offset": 0, "size": 1},
+        {"name": "state", "offset": 1, "size": 1},
+        {"name": "rssi", "offset": 2, "size": 1, "signed": true},
+        {"name": "trend", "offset": 3, "size": 1},
+        {"name": "last_heard_age_milliseconds", "offset": 4, "size": 4},
+        {"name": "matched_reports", "offset": 8, "size": 4},
+        {"name": "pause_flags", "offset": 12, "size": 4},
+        {"name": "session", "offset": 16, "size": 4},
+        {"name": "smoothed_rssi", "offset": 20, "size": 4, "signed": true}
+      ],
+      "groups": [
+        {"name": "state", "values": [
+          {"name": "stopped", "value": 0}, {"name": "listening", "value": 1}, {"name": "heard", "value": 2},
+          {"name": "old_reading", "value": 3}, {"name": "paused", "value": 4}]},
+        {"name": "trend", "values": [
+          {"name": "unknown", "value": 0}, {"name": "stronger", "value": 1}, {"name": "steady", "value": 2}, {"name": "weaker", "value": 3}]}
+      ],
+      "constants": [
+        {"name": "state_mask", "value": 127},
+        {"name": "identity_available_flag", "value": 128},
+        {"name": "rssi_unknown", "value": 127},
+        {"name": "smoothed_rssi_unknown", "value": -2147483648},
+        {"name": "smoothed_rssi_scale", "value": 256, "comment": "Smoothed RSSI is fixed point with 8 fractional bits."},
+        {"name": "age_unknown", "value": 4294967295},
+        {"name": "lease_milliseconds", "value": 30000},
+        {"name": "old_reading_after_milliseconds", "value": 90000}
+      ]
+    },
+    {
+      "name": "physical_volume",
+      "comment": "Response to features 16 and 17. Levels are AVRCP absolute volume 0-127.",
+      "version": 1,
+      "size": 24,
+      "fields": [
+        {"name": "version", "offset": 0, "size": 1},
+        {"name": "flags", "offset": 1, "size": 1},
+        {"name": "confirmed_level", "offset": 2, "size": 1},
+        {"name": "desired_level", "offset": 3, "size": 1},
+        {"name": "observation_revision", "offset": 4, "size": 4},
+        {"name": "authority_token", "offset": 8, "size": 4},
+        {"name": "remaining_lease_milliseconds", "offset": 12, "size": 4},
+        {"name": "usb_media_generation", "offset": 16, "size": 4},
+        {"name": "reserved", "offset": 20, "size": 4}
+      ],
+      "groups": [
+        {"name": "flag", "flags": true, "values": [
+          {"name": "known_physical_gain", "value": 1}, {"name": "pending_request", "value": 2}, {"name": "in_flight_request", "value": 4},
+          {"name": "active_authority", "value": 8}, {"name": "eligible_usb_scope", "value": 16}]}
+      ],
+      "constants": [
+        {"name": "level_unknown", "value": 255},
+        {"name": "maximum_level", "value": 127}
+      ]
+    },
+    {
+      "name": "volume_authority",
+      "comment": "Feature 17 request, USB client only; answered with a physical_volume snapshot. Acquire sends token 0; set_level is the only action with a nonzero level.",
+      "feature": "usb_host_volume_authority",
+      "request_size": 7,
+      "fields": [
+        {"name": "feature", "offset": 0, "size": 1},
+        {"name": "action", "offset": 1, "size": 1},
+        {"name": "token", "offset": 2, "size": 4},
+        {"name": "level", "offset": 6, "size": 1}
+      ],
+      "groups": [
+        {"name": "action", "values": [
+          {"name": "acquire", "value": 0}, {"name": "renew", "value": 1}, {"name": "release", "value": 2}, {"name": "set_level", "value": 3}]}
+      ],
+      "constants": [{"name": "lease_milliseconds", "value": 5000}]
+    }
+  ],
+  "usb": {
+    "comment": "USB identity and the vendor HID collection that carries reports 2 and 3.",
+    "vendor_id": 51966,
+    "products": [
+      {"name": "audio", "value": 16405, "comment": "enumerated while the selected headset can take USB audio"},
+      {"name": "control_only", "value": 16389, "comment": "controls only; shares the board serial with the audio identity"}
+    ],
+    "vendor_usage_page": 65329,
+    "vendor_usage": 1,
+    "report_usages": [{"name": "control", "report_id": 2, "usage": 1}, {"name": "rpc", "report_id": 3, "usage": 2}],
+    "report_size_bits": 8,
+    "report_count": 63
+  }
 }

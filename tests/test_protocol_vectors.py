@@ -179,5 +179,52 @@ class ProtocolVectors(unittest.TestCase):
             with self.subTest(vector['name']):
                 self.assertEqual(parse(bytes.fromhex(vector['hex'])), (vector['valid'], vector['requests']))
 
+    def test_layouts(self):
+        shared = {'actual_codec': protocol.OUTPUT_CODECS, 'input_ownership': protocol.INPUT_OWNERSHIPS}
+        covered = set()
+        for vector in VECTORS['layouts']:
+            with self.subTest(vector['name']):
+                layout = protocol.LAYOUTS[vector['layout']]
+                covered.add(vector['layout'])
+                data = bytes.fromhex(vector['hex'])
+                self.assertEqual(len(data), layout['size'])
+                if 'version' in layout:
+                    self.assertEqual(data[layout['fields']['version'][0]], layout['version'])
+                if layout['request']:
+                    self.assertEqual(data[0], protocol.FEATURES[SPEC_LAYOUTS[vector['layout']]['feature']])
+                decoded = {}
+                for name, (offset, size) in layout['fields'].items():
+                    decoded[name] = int.from_bytes(data[offset:offset + size], 'little',
+                                                   signed=name in layout['signed'])
+                for name, value in decoded.items():
+                    expected = vector['fields'].get(name, 0)
+                    if isinstance(expected, list):
+                        flags = layout['groups'][layout['flag_groups'][0]]
+                        self.assertEqual(names(flags, value), sorted(expected), name)
+                    elif isinstance(expected, str):
+                        table = layout['groups'].get(name) or shared.get(name) or GROUPS_BY_NAME[name]
+                        self.assertEqual(table[expected], value, name)
+                    else:
+                        self.assertEqual(expected, value, name)
+                if layout['flag_groups'] and 'flags' in decoded:
+                    defined = sum(layout['groups'][layout['flag_groups'][0]].values())
+                    self.assertFalse(decoded['flags'] & ~defined, 'undefined flag bits set')
+        self.assertEqual(covered, set(protocol.LAYOUTS))
+
+    def test_usb_identity(self):
+        usb = protocol.USB
+        self.assertEqual(usb['report_count'] * usb['report_size_bits'], (protocol.REPORT_SIZE - 1) * 8)
+        self.assertEqual(set(usb['report_usages']), {protocol.CONTROL_REPORT_ID, protocol.RPC_REPORT_ID})
+        self.assertEqual(len(set(usb['products'].values())), len(usb['products']))
+
+
+SPEC_LAYOUTS = {layout['name']: layout for layout in SPEC['layouts']}
+# Request layouts name values from their response's groups (for example requested_codec).
+GROUPS_BY_NAME = {}
+for _layout in protocol.LAYOUTS.values():
+    for _name, _values in _layout['groups'].items():
+        GROUPS_BY_NAME.setdefault(_name, _values)
+
+
 if __name__ == '__main__':
     unittest.main()

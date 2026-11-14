@@ -3,8 +3,10 @@
 `dongle-protocol.json` is the single source of truth for the USB HID / phone
 control protocol: report framing and offsets, command opcodes, result and RPC
 error codes, typed feature IDs, cached report slots, the settings snapshot
-layout, the AirPods setting catalog with value domains, and the per-model
-setting profiles. It describes what the firmware does; where the prose in
+layout, the AirPods setting catalog with value domains, the per-model
+setting profiles, the request and response layouts of the typed features
+(audio profile, performance, nearby finder, physical volume, volume
+authority) and the USB identity and HID collection. It describes what the firmware does; where the prose in
 `docs/USB-CONTROL.md` or `docs/CONTROL-EXTENSIONS.md` disagrees, the spec and
 the firmware win.
 
@@ -23,12 +25,19 @@ the firmware win.
   Only append settings; never reorder or reuse an index.
 - Profiles list their writable controls by setting name; the generator turns
   that into the 32-bit mask.
+- `layouts` describe typed feature payloads. A response has `size` and usually
+  `version` (byte 0); a request has `request_size` and starts with its feature
+  byte. `groups` hold named values for a field of the same name (`flags: true`
+  marks a bit set, normally read from the `flags` field); `constants` hold
+  sentinels and limits. Request layouts reuse their response's groups.
 
 ## Regenerating
 
 ```
 python3 tools/gen_protocol.py          # rewrite the committed outputs
 python3 tools/gen_protocol.py --check  # fail if any output is stale (tests and CI run this)
+python3 tools/gen_protocol.py --kotlin PATH [--kotlin-package NAME] [--kotlin-object NAME]
+                                       # write the Kotlin object for another repository
 ```
 
 Outputs (committed, so the firmware build needs no extra step):
@@ -38,6 +47,12 @@ Outputs (committed, so the firmware build needs no extra step):
 | `src/tinyusb/dongle_protocol_spec.h` | named constants, setting value validator, write predicates |
 | `src/btstack/dongle_settings_spec.h` | setting catalog and per-model profile table |
 | `tools/dongle_protocol.py` | the same data for the Python tools and the CLI |
+| `protocol/generated/DongleControlProtocol.kt` | a Kotlin object for Android clients, committed as a reviewed sample |
+
+The Kotlin sample uses package `me.kavishdevar.librepods.dongle` and object
+`DongleControlProtocol` so it can replace the Android client's hand-written
+file. Each spec section becomes a nested object, each `name` an UPPER_SNAKE
+constant, field offsets end in `_OFFSET` and multi-byte sizes in `_SIZE`.
 
 ## Golden vectors (`vectors.json`)
 
@@ -54,6 +69,7 @@ to test against. Hex strings are raw bytes; enumerated values are spec names.
 | `settings_sessions` | AACP `packets` with arrival times (ms), then the settings snapshot at `now` (`extended` selects `[2,1]`) | replay and compare bytes |
 | `setting_values` | per setting, `valid` and `invalid` values | value-domain check |
 | `phone_frames` | an RFCOMM byte stream, whether it is `valid`, and how many `requests` it carries | parse |
+| `layouts` | a typed feature request or response `hex` for one `layout`, its `fields` (integer, value name, or list of flag names; omitted fields are zero) and, for some requests, `valid` | decode, or encode `fields` and compare bytes; validate requests |
 
 Consumers in this repository: `tests/protocol_vectors_test.c` (production C
 code; `tools/test.py` converts the JSON with `gen_protocol.py --vectors-c`) and

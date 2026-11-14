@@ -153,9 +153,91 @@ CACHED_REPORTS = {
     'settings_snapshot': 6,
     'equalizer': 7,
 }
+CACHED_REPORT_ENVELOPE_FIELDS = {'age_milliseconds': (0, 4), 'revision': (4, 4)}
+INPUT_OWNERSHIPS = {'idle': 0, 'usb': 1, 'phone': 2}
 SNAPSHOT_VERSION = 1
 SNAPSHOT_RECORD_SIZE = 13
 SNAPSHOT_EXTENDED_SELECTOR = 1
+
+# Typed feature layouts: size, version, fields (offset, size), value groups and constants.
+LAYOUTS = {
+    'configure_audio_profile': {
+        'size': 7,
+        'request': True,
+        'fields': {'feature': (0, 1), 'requested_codec': (1, 1), 'rate_mode': (2, 1), 'requested_bitrate': (3, 4)},
+        'signed': (),
+        'groups': {},
+        'flag_groups': (),
+        'constants': {},
+    },
+    'set_game_mode': {
+        'size': 2,
+        'request': True,
+        'fields': {'feature': (0, 1), 'enabled': (1, 1)},
+        'signed': (),
+        'groups': {},
+        'flag_groups': (),
+        'constants': {'maximum_enabled': 1},
+    },
+    'audio_profile': {
+        'size': 20,
+        'request': False,
+        'version': 1,
+        'fields': {'version': (0, 1), 'requested_codec': (1, 1), 'actual_codec': (2, 1), 'rate_mode': (3, 1), 'requested_bitrate': (4, 4), 'actual_bitrate': (8, 4), 'game_mode_requested': (12, 1), 'game_mode_state': (13, 1), 'input_ownership': (14, 1), 'flags': (15, 1), 'delay_tenths_milliseconds': (16, 2), 'startup_priming_milliseconds': (18, 2)},
+        'signed': (),
+        'groups': {'requested_codec': {'automatic': 0, 'sbc': 1, 'aac': 2, 'aac_eld': 3}, 'rate_mode': {'constant_bitrate': 0, 'variable_bitrate': 1}, 'game_mode_state': {'off': 0, 'pending': 1, 'sent': 2, 'confirmed': 3, 'failed': 4, 'unsupported': 5, 'restoring': 6}, 'flag': {'profile_pending': 1, 'streaming': 2, 'microphone': 4, 'game_mode_supported': 8}},
+        'flag_groups': ('flag',),
+        'constants': {'delay_unknown': 65535, 'startup_priming_milliseconds': 100},
+    },
+    'performance': {
+        'size': 64,
+        'request': False,
+        'version': 1,
+        'fields': {'version': (0, 1), 'input_ownership': (1, 1), 'actual_codec': (2, 1), 'flags': (3, 1), 'uptime_milliseconds': (4, 4), 'pcm_frames_used': (8, 4), 'pcm_frames_capacity': (12, 4), 'pcm_frames_high_water_mark': (16, 4), 'pcm_underflow_frames': (20, 4), 'pcm_dropped_frames': (24, 4), 'encoded_units': (28, 4), 'last_encode_microseconds': (32, 4), 'maximum_encode_microseconds': (36, 4), 'send_failures': (40, 4), 'recovery_requests': (44, 4), 'linked_heap_capacity': (48, 4), 'heap_allocated_bytes': (52, 4), 'heap_remaining_bytes': (56, 4), 'allocator_arena_bytes': (60, 4)},
+        'signed': (),
+        'groups': {'flag': {'streaming': 1, 'microphone': 2, 'phone_connected': 4, 'aacp_ready': 8}},
+        'flag_groups': ('flag',),
+        'constants': {'unavailable': 4294967295},
+    },
+    'nearby_finder': {
+        'size': 24,
+        'request': False,
+        'version': 1,
+        'fields': {'version': (0, 1), 'state': (1, 1), 'rssi': (2, 1), 'trend': (3, 1), 'last_heard_age_milliseconds': (4, 4), 'matched_reports': (8, 4), 'pause_flags': (12, 4), 'session': (16, 4), 'smoothed_rssi': (20, 4)},
+        'signed': ('rssi', 'smoothed_rssi'),
+        'groups': {'state': {'stopped': 0, 'listening': 1, 'heard': 2, 'old_reading': 3, 'paused': 4}, 'trend': {'unknown': 0, 'stronger': 1, 'steady': 2, 'weaker': 3}},
+        'flag_groups': (),
+        'constants': {'state_mask': 127, 'identity_available_flag': 128, 'rssi_unknown': 127, 'smoothed_rssi_unknown': -2147483648, 'smoothed_rssi_scale': 256, 'age_unknown': 4294967295, 'lease_milliseconds': 30000, 'old_reading_after_milliseconds': 90000},
+    },
+    'physical_volume': {
+        'size': 24,
+        'request': False,
+        'version': 1,
+        'fields': {'version': (0, 1), 'flags': (1, 1), 'confirmed_level': (2, 1), 'desired_level': (3, 1), 'observation_revision': (4, 4), 'authority_token': (8, 4), 'remaining_lease_milliseconds': (12, 4), 'usb_media_generation': (16, 4), 'reserved': (20, 4)},
+        'signed': (),
+        'groups': {'flag': {'known_physical_gain': 1, 'pending_request': 2, 'in_flight_request': 4, 'active_authority': 8, 'eligible_usb_scope': 16}},
+        'flag_groups': ('flag',),
+        'constants': {'level_unknown': 255, 'maximum_level': 127},
+    },
+    'volume_authority': {
+        'size': 7,
+        'request': True,
+        'fields': {'feature': (0, 1), 'action': (1, 1), 'token': (2, 4), 'level': (6, 1)},
+        'signed': (),
+        'groups': {'action': {'acquire': 0, 'renew': 1, 'release': 2, 'set_level': 3}},
+        'flag_groups': (),
+        'constants': {'lease_milliseconds': 5000},
+    },
+}
+USB = {
+    'vendor_id': 51966,
+    'products': {'audio': 16405, 'control_only': 16389},
+    'vendor_usage_page': 65329,
+    'vendor_usage': 1,
+    'report_usages': {2: 1, 3: 2},
+    'report_size_bits': 8,
+    'report_count': 63,
+}
 
 AACP_HEADER = b'\x04\x00\x04\x00'
 AACP_OPCODES = {

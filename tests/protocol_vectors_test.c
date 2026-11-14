@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include "../src/btstack/dongle_settings.h"
 #include "../src/btstack/phone_control_protocol.h"
+#include "../src/btstack/playback_options.h"
+#include "../src/btstack/volume_authority.h"
 #include "protocol_vectors.inc"
 
 static uint16_t read16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -150,6 +152,37 @@ static void phone_frames(void) {
     }
 }
 
+// Encode each typed feature layout from its generated field offsets and compare the bytes; requests
+// that state their validity also go through the production validators.
+static void layouts(void) {
+    unsigned validity_checks = 0;
+    for (unsigned i = 0; i < VECTOR_COUNT(layout_vectors); ++i) {
+        const layout_vector_t *v = &layout_vectors[i];
+        uint8_t frame[DONGLE_PERFORMANCE_SIZE] = {0};
+        check(v->size == v->expected_size && v->size <= sizeof(frame), "layout size", v->name);
+        for (unsigned f = 0; f < v->count; ++f)
+            for (unsigned byte = 0; byte < v->fields[f].size; ++byte)
+                frame[v->fields[f].offset + byte] = (uint8_t)(v->fields[f].value >> (8 * byte));
+        check(!memcmp(frame, v->data, v->size), "layout bytes", v->name);
+        if (!v->checks_validity) continue;
+        bool valid = false;
+        if (!strcmp(v->layout, "volume_authority")) {
+            valid = volume_authority_request_valid(v->data, (uint16_t)v->size);
+        } else if (!strcmp(v->layout, "configure_audio_profile")) {
+            playback_options_t options = {v->data[DONGLE_CONFIGURE_AUDIO_PROFILE_OFFSET_REQUESTED_CODEC],
+                                          v->data[DONGLE_CONFIGURE_AUDIO_PROFILE_OFFSET_RATE_MODE],
+                                          dongle_u32(v->data + DONGLE_CONFIGURE_AUDIO_PROFILE_OFFSET_REQUESTED_BITRATE)};
+            valid = v->data[DONGLE_CONFIGURE_AUDIO_PROFILE_OFFSET_FEATURE] == DONGLE_FEATURE_CONFIGURE_AUDIO_PROFILE &&
+                    playback_options_valid(options);
+        } else {
+            check(false, "layout validity", v->name);
+        }
+        check(valid == v->valid, "layout validity", v->name);
+        ++validity_checks;
+    }
+    check(validity_checks > 0, "layout coverage", "no request validity vectors");
+}
+
 int main(void) {
     control_commands();
     control_status();
@@ -159,5 +192,6 @@ int main(void) {
     settings_sessions();
     setting_values();
     phone_frames();
-    puts("protocol vectors: commands, status, RPC, features, readback, settings and phone frames passed");
+    layouts();
+    puts("protocol vectors: commands, status, RPC, features, readback, settings, phone frames and layouts passed");
 }
