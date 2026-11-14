@@ -10,39 +10,12 @@ from audio_diagnostics import Hid, RequestRejected, Unsupported, typed_request
 from airpods_att import AttSettings, Unconfirmed as AttUnconfirmed
 from airpods_hearing import HearingSettings, PARAMETERS
 import airpods_hearing
+# Setting IDs, value names and encodings are generated from protocol/dongle-protocol.json;
+# model gating stays in firmware.
+from dongle_protocol import EXTENDED_SETTINGS, HOLD_ACTIONS as HOLD, HOLD_MODE_BITS, HOLD_MODE_MIN_BITS
+from dongle_protocol import PERCENT_FLAGS, SETTINGS, TOGGLE
 
 
-MODES = {'off': 1, 'anc': 2, 'transparency': 3, 'adaptive': 4}
-TOGGLE = {'on': 1, 'off': 2}
-HOLD = {'noise-control': 1, 'siri': 5}
-# Values match the app and firmware catalog; model gating stays in firmware.
-SETTINGS = {
-    'mode': (0x0d, MODES),
-    'microphone': (0x01, {'auto': 0, 'right': 1, 'left': 2}),
-    'ear-detection': (0x0a, {'on': 2, 'off': 1}),
-    'one-bud-anc': (0x1b, TOGGLE),
-    'conversation-awareness': (0x28, TOGGLE),
-    'personalized-volume': (0x26, TOGGLE),
-    'en352-protection': (0x37, TOGGLE),
-    'gain-swipe': (0x2f, TOGGLE),
-    'smart-routing': (0x20, TOGGLE),
-    'allow-auto-connect': (0x36, TOGGLE),
-    'allow-off': (0x34, TOGGLE),
-    'pause-when-asleep': (0x35, TOGGLE),
-    'case-sounds': (0x31, TOGGLE),
-    'optimized-charging': (0x3b, TOGGLE),
-    'volume-swipe': (0x25, TOGGLE),
-    'press-speed': (0x17, {'default': 0, 'slower': 1, 'slowest': 2}),
-    'hold-duration': (0x18, {'default': 0, 'slower': 1, 'slowest': 2}),
-    'swipe-duration': (0x23, {'default': 0, 'longer': 1, 'longest': 2}),
-    'call-controls': (0x24, {'default': 0x0300, 'swapped': 0x0200}),
-    'crown-direction': (0x1c, {'default': 2, 'reversed': 1}),
-    'tone-volume': (0x1f, 'percent'),
-    'case-volume': (0x40, 'percent'),
-    'adaptive-strength': (0x2e, 'percent'),
-    'hold-modes': (0x1a, 'modes'),
-    'hold-actions': (0x16, 'actions'),
-}
 EXTRA_SETTINGS = {'loud-sound-reduction': TOGGLE, 'game-mode': TOGGLE}
 SETTING_NAMES = tuple(SETTINGS) + tuple(EXTRA_SETTINGS) + tuple(PARAMETERS)
 
@@ -56,7 +29,7 @@ def value_help(name):
     if kind == 'percent':
         return 'integer 0..100'
     if kind == 'modes':
-        return 'at least two distinct modes, comma-separated: ' + ', '.join(MODES)
+        return 'at least two distinct modes, comma-separated: ' + ', '.join(HOLD_MODE_BITS)
     return 'left,right actions, comma-separated: noise-control or siri for each ear'
 
 
@@ -75,12 +48,13 @@ def encode(name, value):
     if kind == 'percent':
         if not value.isascii() or not value.isdecimal() or not 0 <= int(value) <= 100:
             raise ValueError(value_help(name))
-        return int(value) | (0x5000 if control == 0x1f else 0)
+        return int(value) | PERCENT_FLAGS.get(control, 0)
     parts = value.split(',')
     if kind == 'modes':
-        if len(parts) < 2 or len(set(parts)) != len(parts) or any(p not in MODES for p in parts):
+        if (len(parts) < HOLD_MODE_MIN_BITS or len(set(parts)) != len(parts) or
+                any(p not in HOLD_MODE_BITS for p in parts)):
             raise ValueError(value_help(name))
-        return sum(1 << (MODES[p] - 1) for p in parts)
+        return sum(HOLD_MODE_BITS[p] for p in parts)
     if len(parts) != 2 or any(p not in HOLD for p in parts):
         raise ValueError(value_help(name))
     return HOLD[parts[0]] | HOLD[parts[1]] << 8
@@ -93,11 +67,12 @@ def decode(name, raw):
             if raw == value:
                 return word
     elif kind == 'percent':
-        value = raw & 0xff if control == 0x1f else raw
-        if raw == (value | (0x5000 if control == 0x1f else 0)) and value <= 100:
+        value = raw & 0xff if control in PERCENT_FLAGS else raw
+        if raw == (value | PERCENT_FLAGS.get(control, 0)) and value <= 100:
             return str(value)
-    elif kind == 'modes' and raw <= 15 and raw.bit_count() >= 2:
-        return ','.join(word for word, bit in MODES.items() if raw & (1 << (bit - 1)))
+    elif (kind == 'modes' and not raw & ~sum(HOLD_MODE_BITS.values()) and
+          raw.bit_count() >= HOLD_MODE_MIN_BITS):
+        return ','.join(word for word, bit in HOLD_MODE_BITS.items() if raw & bit)
     elif kind == 'actions':
         actions = {v: k for k, v in HOLD.items()}
         if raw <= 0xffff and (raw & 255) in actions and (raw >> 8) in actions:
@@ -197,7 +172,7 @@ class SettingsClient:
             raise RuntimeError('AirPods settings connection is not ready')
         if self.status[7] & 16:
             raise RuntimeError('Stop microphone use before changing AirPods settings')
-        extended = control in (0x37, 0x2f)
+        extended = control in EXTENDED_SETTINGS
         before = self.read(extended).get(control)
         if before and before[2] == value:
             return f'{name}: {decode(name, value)} (already reported, {before[0]} ms old; no write sent)'
@@ -455,7 +430,7 @@ def main(argv=None):
         elif args.command == 'firmware':
             print(client.firmware())
         else:
-            values = client.read(args.command == 'settings' or SETTINGS[args.setting][0] in (0x37, 0x2f))
+            values = client.read(args.command == 'settings' or SETTINGS[args.setting][0] in EXTENDED_SETTINGS)
             for name in ([args.setting] if args.command == 'get' else SETTINGS):
                 record = values.get(SETTINGS[name][0])
                 if record is None:
