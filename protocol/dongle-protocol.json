@@ -212,7 +212,7 @@
     {"name": "hearing_assistance_gate", "value": 3},
     {"name": "pme", "value": 4},
     {"name": "ear_state", "value": 5},
-    {"name": "settings_snapshot", "value": 6},
+    {"name": "settings_snapshot", "value": 6, "age_revision_envelope": false},
     {"name": "equalizer", "value": 7}
   ],
   "settings_snapshot": {
