@@ -347,6 +347,7 @@ def main():
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
+    subprocess.run([sys.executable, str(ROOT / "tools/gen_protocol.py"), "--check"], cwd=ROOT, check=True)
     tests = {
         "peer": ["tests/peer_test.c"],
         "button_gesture": ["tests/button_gesture_test.c"],

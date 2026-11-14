@@ -24,6 +24,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build python3
+      - name: Check generated protocol bindings
+        run: python3 tools/gen_protocol.py --check
       - name: Run regression tests with ASan and UBSan
         run: python3 tools/test.py --sanitize
       - name: Test release packaging and safe publication
