@@ -151,7 +151,9 @@ static void test_model_and_firmware(void) {
     identify(&s,"A1523","6.8.8","");
     assert(s.profile && s.firmware_major==6 && !settings_supported(&s,0x0d,2));
     identify(&s,"A3053","9A348","");
-    assert(settings_supported(&s,0x16,0x0505) && !settings_supported(&s,0x16,0x0105));
+    // No listening modes: Siri (1) on both ears is the only valid pair; noise control (5) is refused.
+    assert(settings_supported(&s,0x16,0x0101) && !settings_supported(&s,0x16,0x0105) &&
+           !settings_supported(&s,0x16,0x0501) && !settings_supported(&s,0x16,0x0505));
     identify(&s,"A3454","7E108",""); reported(&s,0x35,2,0);
     assert(!settings_supported(&s,0x35,1));
     identify(&s,"A3454","8B34","");

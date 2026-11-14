@@ -270,7 +270,12 @@ class CliTests(unittest.TestCase):
             ('case-volume', '0', 0), ('adaptive-strength', '100', 100),
             ('call-controls', 'default', 0x0300), ('crown-direction', 'reversed', 1),
             ('hold-modes', 'anc,transparency,adaptive', 14),
+            # Left then right on the command line; the device keeps right in the low
+            # byte and left in the next, with 1 = Siri and 5 = noise control.
             ('hold-actions', 'siri,noise-control', 0x0105),
+            ('hold-actions', 'noise-control,siri', 0x0501),
+            ('hold-actions', 'siri,siri', 0x0101),
+            ('hold-actions', 'noise-control,noise-control', 0x0505),
         ]:
             self.assertEqual(airpods.encode(name, word), value)
             self.assertEqual(airpods.decode(name, value), word)

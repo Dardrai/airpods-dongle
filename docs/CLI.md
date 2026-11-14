@@ -186,7 +186,10 @@ python tools/airpods.py set tone-volume 75
 
 The hold-mode selection is shared by both ears, not an ordered cycle. The CLI
 does not silently enable `allow-off` to satisfy another command. `hold-actions`
-explicitly sets both sides together. Tone/case volume refers to notification
+explicitly sets both sides together. On the wire the right ear is the low byte and
+the left ear the next byte, with 1 = Siri and 5 = noise control (Apple's layout as
+documented in LibrePods); firmware and CLI up to 0.1.66 had both reversed, which gave the
+opposite action whenever both ears were set the same. Tone/case volume refers to notification
 sounds, not music volume. No raw ATT packets or hearing-threshold edits are exposed.
 
 ### Hearing adjustments

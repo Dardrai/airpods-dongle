@@ -203,7 +203,7 @@ SETTING_DOMAINS = {
     0x01: {'kind': 'enum', 'values': [{'name': 'auto', 'value': 0}, {'name': 'right', 'value': 1}, {'name': 'left', 'value': 2}]},
     0x0a: {'kind': 'enum', 'values': [{'name': 'on', 'value': 2}, {'name': 'off', 'value': 1}]},
     0x0d: {'kind': 'enum', 'values': [{'name': 'off', 'value': 1}, {'name': 'anc', 'value': 2}, {'name': 'transparency', 'value': 3}, {'name': 'adaptive', 'value': 4}]},
-    0x16: {'kind': 'action_pair', 'sides': ['left', 'right'], 'report_mask': 65535, 'values': [{'name': 'noise-control', 'value': 1}, {'name': 'siri', 'value': 5}]},
+    0x16: {'kind': 'action_pair', 'sides': ['right', 'left'], 'report_mask': 65535, 'values': [{'name': 'siri', 'value': 1}, {'name': 'noise-control', 'value': 5}]},
     0x17: {'kind': 'enum', 'values': [{'name': 'default', 'value': 0}, {'name': 'slower', 'value': 1}, {'name': 'slowest', 'value': 2}]},
     0x18: {'kind': 'enum', 'values': [{'name': 'default', 'value': 0}, {'name': 'slower', 'value': 1}, {'name': 'slowest', 'value': 2}]},
     0x1a: {'kind': 'mode_mask', 'values': [{'name': 'off', 'value': 1}, {'name': 'anc', 'value': 2}, {'name': 'transparency', 'value': 4}, {'name': 'adaptive', 'value': 8}], 'minimum_selected': 2},
@@ -274,7 +274,7 @@ SETTINGS = {
     'hold-actions': (0x16, 'actions'),
 }
 TOGGLE = {'on': 1, 'off': 2}
-HOLD_ACTIONS = {'noise-control': 1, 'siri': 5}
+HOLD_ACTIONS = {'siri': 1, 'noise-control': 5}
 HOLD_MODE_BITS = {'off': 1, 'anc': 2, 'transparency': 4, 'adaptive': 8}
 HOLD_MODE_MINIMUM_SELECTED = 2
 PERCENT_FLAGS = {0x1f: 0x5000}

@@ -57,7 +57,9 @@ def encode(name, value):
         return sum(HOLD_MODE_BITS[p] for p in parts)
     if len(parts) != 2 or any(p not in HOLD for p in parts):
         raise ValueError(value_help(name))
-    return HOLD[parts[0]] | HOLD[parts[1]] << 8
+    left, right = parts
+    # The device stores the right ear in the low byte and the left ear in the next byte.
+    return HOLD[right] | HOLD[left] << 8
 
 
 def decode(name, raw):
@@ -76,7 +78,8 @@ def decode(name, raw):
     elif kind == 'actions':
         actions = {v: k for k, v in HOLD.items()}
         if raw <= 0xffff and (raw & 255) in actions and (raw >> 8) in actions:
-            return actions[raw & 255] + ',' + actions[raw >> 8]
+            right, left = actions[raw & 255], actions[raw >> 8]
+            return left + ',' + right
     return f'unknown device value (0x{raw:x})'
 
 
