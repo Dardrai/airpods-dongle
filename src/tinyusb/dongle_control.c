@@ -59,31 +59,31 @@ void dongle_control_set(const uint8_t *buffer, uint16_t size) {
     (void)dongle_control_client_set(DONGLE_CLIENT_USB, report);
 }
 static void execute(control_client_t *c, const uint8_t *p) {
-    uint32_t sequence = dongle_u32(p + DONGLE_CMD_SEQUENCE_OFFSET);
-    uint8_t opcode = p[DONGLE_CMD_OPCODE_OFFSET];
+    uint32_t sequence = dongle_u32(p + DONGLE_COMMAND_OFFSET_COMMAND_SEQUENCE);
+    uint8_t opcode = p[DONGLE_COMMAND_OFFSET_OPCODE];
     if (c->last_sequence && (!sequence || sequence == c->last_sequence ||
         (uint32_t)(sequence - c->last_sequence) >= UINT32_C(0x80000000))) return;
     c->last_sequence = sequence;
-    c->last_opcode = opcode <= DONGLE_OP_PHONE_PAIRING ? opcode : 0;
+    c->last_opcode = opcode <= DONGLE_COMMAND_OPEN_PHONE_PAIRING ? opcode : 0;
     c->last_result = DONGLE_ACCEPTED;
     if (!dongle_command_valid(p, DONGLE_REPORT_SIZE)) c->last_result = DONGLE_MALFORMED;
-    else if (dongle_u32(p + DONGLE_CMD_GENERATION_OFFSET) != c->generation ||
-             memcmp(p + DONGLE_CMD_ADDRESS_OFFSET, selected, DONGLE_CMD_ADDRESS_SIZE)) c->last_result = DONGLE_STALE;
+    else if (dongle_u32(p + DONGLE_COMMAND_OFFSET_CONNECTION_GENERATION) != c->generation ||
+             memcmp(p + DONGLE_COMMAND_OFFSET_SELECTED_ADDRESS, selected, DONGLE_COMMAND_SIZE_SELECTED_ADDRESS)) c->last_result = DONGLE_STALE;
     else if (dongle_rpc_busy()) c->last_result = DONGLE_BUSY;
-    else if (opcode == DONGLE_OP_RECONNECT) {
+    else if (opcode == DONGLE_COMMAND_RECONNECT_AIRPODS) {
         static const uint8_t empty[6];
         if (!memcmp(selected, empty, 6)) c->last_result = DONGLE_DISCONNECTED;
         else if (!aacp_takeover_request(selected)) c->last_result = DONGLE_BUSY;
         else a2dp_source_reconnect();
-    } else if (opcode == DONGLE_OP_PAIR) {
+    } else if (opcode == DONGLE_COMMAND_PAIR_AIRPODS) {
         if (usb_mic_requested() || aacp_mic_requested() || aacp_mic_active() ||
             phone_sink_connected() || get_usb_streaming()) c->last_result = DONGLE_BUSY;
         else if (!avdtp_disconnect_and_scan()) c->last_result = DONGLE_BUSY;
-    } else if (opcode == DONGLE_OP_LISTENING_MODE) {
+    } else if (opcode == DONGLE_COMMAND_CHANGE_LISTENING_MODE) {
         if (!aacp_control_ready()) c->last_result = DONGLE_DISCONNECTED;
         else if (!aacp_control_readback()->anc) c->last_result = DONGLE_UNSUPPORTED;
-        else if (!aacp_control_anc(p[DONGLE_CMD_ARGUMENT_OFFSET])) c->last_result = DONGLE_BUSY;
-    } else if (opcode == DONGLE_OP_PHONE_PAIRING) {
+        else if (!aacp_control_anc(p[DONGLE_COMMAND_OFFSET_ARGUMENT])) c->last_result = DONGLE_BUSY;
+    } else if (opcode == DONGLE_COMMAND_OPEN_PHONE_PAIRING) {
         if (bt_hci_phone_pairing_busy()) c->last_result = DONGLE_BUSY;
         else if (!bt_hci_phone_pairing_start())
             c->last_result = bt_hci_phone_pairing_busy() ? DONGLE_BUSY : DONGLE_UNSUPPORTED;
@@ -117,38 +117,38 @@ void dongle_control_poll(void) {
         restore_interrupts(irq);
         if (take) execute(c, request);
         dongle_header(next);
-        next[DONGLE_STATUS_FLAGS_OFFSET] = (get_a2dp_connected_flag() ? DONGLE_FLAG_A2DP_CONNECTED : 0) |
-            (aacp_control_ready() ? DONGLE_FLAG_AACP_READY : 0) |
-            (check_is_streaming() ? DONGLE_FLAG_STREAMING : 0) |
-            (phone_sink_connected() ? DONGLE_FLAG_PHONE_CONNECTED : 0) |
-            (aacp_mic_active() ? DONGLE_FLAG_MICROPHONE_ACTIVE : 0) |
-            (bt_hci_phone_pairing_active() ? DONGLE_FLAG_PHONE_PAIRING : 0) |
-            (get_usb_streaming() ? DONGLE_FLAG_USB_PLAYBACK : 0);
-        dongle_put32(next + DONGLE_STATUS_GENERATION_OFFSET, c->generation);
-        memcpy(next + DONGLE_STATUS_ADDRESS_OFFSET, selected, DONGLE_STATUS_ADDRESS_SIZE);
+        next[DONGLE_STATUS_OFFSET_FLAGS] = (get_a2dp_connected_flag() ? DONGLE_STATUS_FLAG_A2DP_CONNECTED : 0) |
+            (aacp_control_ready() ? DONGLE_STATUS_FLAG_AACP_READY : 0) |
+            (check_is_streaming() ? DONGLE_STATUS_FLAG_STREAMING : 0) |
+            (phone_sink_connected() ? DONGLE_STATUS_FLAG_PHONE_CONNECTED : 0) |
+            (aacp_mic_active() ? DONGLE_STATUS_FLAG_MICROPHONE_ACTIVE : 0) |
+            (bt_hci_phone_pairing_active() ? DONGLE_STATUS_FLAG_PHONE_PAIRING : 0) |
+            (get_usb_streaming() ? DONGLE_STATUS_FLAG_USB_PLAYBACK : 0);
+        dongle_put32(next + DONGLE_STATUS_OFFSET_CONNECTION_GENERATION, c->generation);
+        memcpy(next + DONGLE_STATUS_OFFSET_SELECTED_ADDRESS, selected, DONGLE_STATUS_SIZE_SELECTED_ADDRESS);
         dongle_readback_t observed=*aacp_control_readback();
         uint8_t present, case_source;
         dongle_case_battery_merge(&observed,aacp_control_ready(),&present,&case_source);
         const dongle_readback_t *readback=&observed;
-        next[DONGLE_STATUS_LISTENING_MODE_OFFSET] = readback->anc;
-        memcpy(next + DONGLE_STATUS_BATTERY_OFFSET, readback->battery, DONGLE_STATUS_BATTERY_SIZE);
-        next[DONGLE_STATUS_CHARGING_OFFSET] = readback->charging;
-        next[DONGLE_STATUS_CODEC_OFFSET] = dongle_output_codec();
+        next[DONGLE_STATUS_OFFSET_LISTENING_MODE] = readback->anc;
+        memcpy(next + DONGLE_STATUS_OFFSET_BATTERY_PERCENT, readback->battery, DONGLE_STATUS_SIZE_BATTERY_PERCENT);
+        next[DONGLE_STATUS_OFFSET_CHARGING_COMPONENTS] = readback->charging;
+        next[DONGLE_STATUS_OFFSET_OUTPUT_CODEC] = dongle_output_codec();
         for (unsigned i = 0; i < 3; ++i)
-            dongle_put32(next + DONGLE_STATUS_BATTERY_AGES_OFFSET + i * 4, dongle_readback_age(readback,i,now));
-        dongle_put32(next + DONGLE_STATUS_LAST_SEQUENCE_OFFSET, c->last_sequence);
-        next[DONGLE_STATUS_RESULT_OFFSET] = c->last_result;
-        next[DONGLE_STATUS_LAST_OPCODE_OFFSET] = c->last_opcode;
+            dongle_put32(next + DONGLE_STATUS_OFFSET_BATTERY_AGES_MILLISECONDS + i * 4, dongle_readback_age(readback,i,now));
+        dongle_put32(next + DONGLE_STATUS_OFFSET_LAST_COMMAND_SEQUENCE, c->last_sequence);
+        next[DONGLE_STATUS_OFFSET_LAST_COMMAND_RESULT] = c->last_result;
+        next[DONGLE_STATUS_OFFSET_LAST_COMMAND_OPCODE] = c->last_opcode;
         // Capability 256: BOOTSEL during audio; 512: confirmed routing handover.
-        uint16_t capabilities = DONGLE_CAP_PAIR_RECONNECT | DONGLE_CAP_PHONE_PAIRING |
-            DONGLE_CAP_SETTINGS_TRANSPORT | DONGLE_CAP_TYPED_FEATURES | DONGLE_CAP_SETTINGS_LEASE |
-            DONGLE_CAP_BATTERY_OBSERVATION | DONGLE_CAP_HOST_VOLUME_AUTHORITY |
-            DONGLE_CAP_RUNTIME_UPDATE | DONGLE_CAP_ROUTING_HANDOVER |
-            (readback->anc ? DONGLE_CAP_NOISE_CONTROL : 0);
-        next[DONGLE_STATUS_CAPABILITIES_OFFSET] = (uint8_t)capabilities;
-        next[DONGLE_STATUS_CAPABILITIES_OFFSET + 1] = (uint8_t)(capabilities >> 8);
-        next[DONGLE_STATUS_PRESENT_OFFSET] = present;
-        next[DONGLE_STATUS_CASE_SOURCE_OFFSET] = case_source;
+        uint16_t capabilities = DONGLE_CAPABILITY_PAIR_AND_RECONNECT | DONGLE_CAPABILITY_PHONE_PAIRING |
+            DONGLE_CAPABILITY_SETTINGS_TRANSPORT | DONGLE_CAPABILITY_TYPED_FEATURES | DONGLE_CAPABILITY_SETTINGS_WORKFLOW_LEASE |
+            DONGLE_CAPABILITY_BATTERY_OBSERVATION_FLAGS | DONGLE_CAPABILITY_USB_HOST_VOLUME_AUTHORITY |
+            DONGLE_CAPABILITY_ACTIVE_AUDIO_RUNTIME_UPDATE | DONGLE_CAPABILITY_EXPLICIT_ROUTING_HANDOVER |
+            (readback->anc ? DONGLE_CAPABILITY_CONFIRMED_NOISE_CONTROL : 0);
+        next[DONGLE_STATUS_OFFSET_CAPABILITIES] = (uint8_t)capabilities;
+        next[DONGLE_STATUS_OFFSET_CAPABILITIES + 1] = (uint8_t)(capabilities >> 8);
+        next[DONGLE_STATUS_OFFSET_PRESENT_COMPONENTS] = present;
+        next[DONGLE_STATUS_OFFSET_CASE_OBSERVED_COMPONENTS] = case_source;
         irq = save_and_disable_interrupts();
         memcpy(c->status, next, DONGLE_REPORT_SIZE);
         c->initialized = true;

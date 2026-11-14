@@ -9,8 +9,8 @@
 #include "hardware/sync.h"
 #include "btstack_run_loop.h"
 
-#define RPC_LIMIT DONGLE_RPC_PAYLOAD_LIMIT
-#define CHUNK DONGLE_RPC_CHUNK
+#define RPC_LIMIT DONGLE_RPC_MAXIMUM_PAYLOAD_LENGTH
+#define CHUNK DONGLE_RPC_MAXIMUM_FRAGMENT_LENGTH
 #define LEASE_IDLE_MS 5000u
 #define LEASE_MAX_MS 30000u
 enum { IDLE=DONGLE_RPC_PHASE_IDLE, ASSEMBLING=DONGLE_RPC_PHASE_ASSEMBLING, RUNNING=DONGLE_RPC_PHASE_RUNNING,
@@ -63,24 +63,24 @@ bool dongle_rpc_transport_current(void) {
     rpc_client_t *c=&clients[transport_owner];
     if(!c->online || c->seen_epoch!=c->epoch ||
         c->target!=dongle_control_client_generation((uint8_t)transport_owner))return false;
-    if(c->operation==DONGLE_RPC_OP_ATT || c->operation==DONGLE_RPC_OP_AACP || lease_owner>=0)
+    if(c->operation==DONGLE_RPC_OPERATION_SEND_ATT_REQUEST || c->operation==DONGLE_RPC_OPERATION_SEND_AACP_PACKET || lease_owner>=0)
         return lease_owner==transport_owner && lease_current(btstack_run_loop_get_time_ms());
     return true;
 }
 static uint8_t lease_request(unsigned client,const uint8_t *p,uint16_t size,
                               uint8_t *out,uint16_t *length,uint32_t now) {
-    if(size!=6 || p[1]>DONGLE_LEASE_RELEASE)return MALFORMED;
+    if(size!=6 || p[1]>DONGLE_SETTINGS_LEASE_RELEASE)return MALFORMED;
     uint8_t action=p[1];uint32_t token=dongle_u32(p+2);
-    if(action==DONGLE_LEASE_ACQUIRE){
+    if(action==DONGLE_SETTINGS_LEASE_ACQUIRE){
         if(token)return MALFORMED;
         if(lease_owner>=0)return BUSY;
         lease_owner=(int)client;lease_target=clients[client].target;
         if(!++lease_serial)++lease_serial;
         lease_token=lease_serial;lease_touched=lease_started=now;
-        out[0]=DONGLE_LEASE_RESPONSE_VERSION;dongle_put32(out+1,lease_token);*length=5;
+        out[0]=DONGLE_SETTINGS_LEASE_RESPONSE_VERSION;dongle_put32(out+1,lease_token);*length=5;
     }else{
         if(lease_owner!=(int)client || !token || token!=lease_token || !lease_current(now))return STALE;
-        if(action==DONGLE_LEASE_RENEW)lease_touched=now;
+        if(action==DONGLE_SETTINGS_LEASE_RENEW)lease_touched=now;
         else release_lease();
     }
     return 0;
@@ -93,7 +93,7 @@ void dongle_rpc_available(bool on) { dongle_rpc_client_available(DONGLE_CLIENT_U
 bool dongle_rpc_client_get(uint8_t client, uint8_t out[64]) {
     if (client>=DONGLE_CLIENT_COUNT || !out || !clients[client].online ||
         clients[client].seen_epoch!=clients[client].epoch ||
-        clients[client].published[DONGLE_HEADER_REPORT_ID_OFFSET]!=DONGLE_RPC_REPORT_ID) return false;
+        clients[client].published[DONGLE_HEADER_OFFSET_REPORT_ID]!=DONGLE_RPC_REPORT_ID) return false;
     memcpy(out,clients[client].published,DONGLE_REPORT_SIZE); return true;
 }
 uint16_t dongle_rpc_get(uint8_t *out,uint16_t capacity) {
@@ -114,58 +114,58 @@ void dongle_rpc_set(const uint8_t *buffer,uint16_t length) {
 }
 static void handle(unsigned client,const uint8_t *p,uint32_t now) {
     rpc_client_t *c=&clients[client];
-    uint32_t seq=dongle_u32(p+DONGLE_RPC_SEQUENCE_OFFSET),gen=dongle_u32(p+DONGLE_RPC_GENERATION_OFFSET);
-    uint16_t size=get16(p+DONGLE_RPC_TOTAL_OFFSET),offset=get16(p+DONGLE_RPC_OFFSET_OFFSET);
-    uint8_t op=p[DONGLE_RPC_OPERATION_OFFSET],length=p[DONGLE_RPC_LENGTH_OFFSET];
-    const uint8_t *payload=p+DONGLE_RPC_PAYLOAD_OFFSET;
+    uint32_t seq=dongle_u32(p+DONGLE_RPC_OFFSET_TRANSACTION_SEQUENCE),gen=dongle_u32(p+DONGLE_RPC_OFFSET_CONNECTION_GENERATION);
+    uint16_t size=get16(p+DONGLE_RPC_OFFSET_TOTAL_LENGTH),offset=get16(p+DONGLE_RPC_OFFSET_FRAGMENT_OFFSET);
+    uint8_t op=p[DONGLE_RPC_OFFSET_OPERATION],length=p[DONGLE_RPC_OFFSET_FRAGMENT_LENGTH];
+    const uint8_t *payload=p+DONGLE_RPC_OFFSET_PAYLOAD;
     bool busy=c->phase==ASSEMBLING || c->phase==RUNNING;
     if (!dongle_rpc_header_valid(p) || !seq) { if(seq==c->sequence && busy)fail(client,MALFORMED); return; }
     if (gen!=c->target) return;
-    if (op==DONGLE_RPC_OP_CANCEL && seq==c->sequence && !size && !offset && !length) { fail(client,CANCELLED); return; }
-    if (op==DONGLE_RPC_OP_PAGE && seq==c->sequence && c->phase==COMPLETE && !size && !length && offset<=c->total) {
+    if (op==DONGLE_RPC_OPERATION_CANCEL_TRANSACTION && seq==c->sequence && !size && !offset && !length) { fail(client,CANCELLED); return; }
+    if (op==DONGLE_RPC_OPERATION_SELECT_RESPONSE_PAGE && seq==c->sequence && c->phase==COMPLETE && !size && !length && offset<=c->total) {
         if(c->page!=offset){c->page=offset;c->dirty=true;}
         c->touched=now; return;
     }
-    if (op==DONGLE_RPC_OP_COMMIT && seq==c->sequence && !size && !offset && !length) {
+    if (op==DONGLE_RPC_OPERATION_COMMIT_TRANSACTION && seq==c->sequence && !size && !offset && !length) {
         if(c->phase!=ASSEMBLING)return;
         if(c->received!=c->total){fail(client,MALFORMED);return;}
         if(transport_owner>=0){fail(client,BUSY);return;}
-        if(c->operation==DONGLE_RPC_OP_ATT || c->operation==DONGLE_RPC_OP_AACP){
+        if(c->operation==DONGLE_RPC_OPERATION_SEND_ATT_REQUEST || c->operation==DONGLE_RPC_OPERATION_SEND_AACP_PACKET){
             if(lease_owner!=(int)client || !lease_current(now)){fail(client,lease_owner<0?STALE:BUSY);return;}
             lease_touched=now;
-        }else if(c->operation==DONGLE_RPC_OP_FEATURE && lease_owner>=0 && lease_owner!=(int)client &&
-            (c->payload[0]==DONGLE_FEATURE_SETTING_WRITE || c->payload[0]==DONGLE_FEATURE_AUDIO_PROFILE ||
-             c->payload[0]==DONGLE_FEATURE_GAME_MODE)){
+        }else if(c->operation==DONGLE_RPC_OPERATION_TYPED_FEATURE_REQUEST && lease_owner>=0 && lease_owner!=(int)client &&
+            (c->payload[0]==DONGLE_FEATURE_WRITE_SETTING || c->payload[0]==DONGLE_FEATURE_CONFIGURE_AUDIO_PROFILE ||
+             c->payload[0]==DONGLE_FEATURE_SET_GAME_MODE)){
             fail(client,BUSY);return;
         }
-        if(c->operation==DONGLE_RPC_OP_FEATURE && lease_owner>=0 &&
-            (c->payload[0]==DONGLE_FEATURE_ROUTING_HANDOVER ||
+        if(c->operation==DONGLE_RPC_OPERATION_TYPED_FEATURE_REQUEST && lease_owner>=0 &&
+            (c->payload[0]==DONGLE_FEATURE_REQUEST_ROUTING_HANDOVER ||
              (c->payload[0]==DONGLE_FEATURE_RECONNECT_POLICY && c->total>1))){fail(client,BUSY);return;}
-        if(c->operation!=DONGLE_RPC_OP_CACHED && c->operation!=DONGLE_RPC_OP_FEATURE &&
+        if(c->operation!=DONGLE_RPC_OPERATION_READ_CACHED_REPORT && c->operation!=DONGLE_RPC_OPERATION_TYPED_FEATURE_REQUEST &&
             (usb_mic_requested() || aacp_mic_active())){fail(client,BUSY);return;}
         c->phase=RUNNING; c->touched=now;c->dirty=true;
-        if(c->operation==DONGLE_RPC_OP_ATT){
+        if(c->operation==DONGLE_RPC_OPERATION_SEND_ATT_REQUEST){
             transport_owner=(int)client;
             if(!dongle_att_request(c->payload,c->total))fail(client,TRANSPORT);
-        }else if(c->operation==DONGLE_RPC_OP_AACP){
+        }else if(c->operation==DONGLE_RPC_OPERATION_SEND_AACP_PACKET){
             transport_owner=(int)client;
             if(!aacp_research_send(c->payload,c->total))fail(client,TRANSPORT);
-        }else if(c->operation==DONGLE_RPC_OP_CACHED && c->total==1 &&
-            c->payload[0]>=DONGLE_CACHED_MODEL && c->payload[0]<=DONGLE_CACHED_EQ){
+        }else if(c->operation==DONGLE_RPC_OPERATION_READ_CACHED_REPORT && c->total==1 &&
+            c->payload[0]>=DONGLE_CACHED_REPORT_MODEL_METADATA && c->payload[0]<=DONGLE_CACHED_REPORT_EQUALIZER){
             c->total=aacp_research_cached(c->payload[0],c->payload,sizeof(c->payload));
             c->phase=COMPLETE; c->page=0;
-        }else if(c->operation==DONGLE_RPC_OP_FEATURE){
+        }else if(c->operation==DONGLE_RPC_OPERATION_TYPED_FEATURE_REQUEST){
             uint16_t count=0;
-            bool setting=c->payload[0]==DONGLE_FEATURE_SETTING_WRITE;
+            bool setting=c->payload[0]==DONGLE_FEATURE_WRITE_SETTING;
             if(setting)transport_owner=(int)client;
-            uint8_t result=c->payload[0]==DONGLE_FEATURE_SETTINGS_LEASE ? lease_request(client,c->payload,c->total,c->payload,&count,now) :
+            uint8_t result=c->payload[0]==DONGLE_FEATURE_SETTINGS_WORKFLOW_LEASE ? lease_request(client,c->payload,c->total,c->payload,&count,now) :
                 dongle_features_request((uint8_t)client,c->payload,c->total,c->payload,sizeof(c->payload),&count);
             if(result)fail(client,result);
             else if(!setting){c->total=count;c->phase=COMPLETE;c->page=0;}
         }else fail(client,UNSUPPORTED);
         return;
     }
-    if((op!=DONGLE_RPC_OP_ATT && op!=DONGLE_RPC_OP_AACP && op!=DONGLE_RPC_OP_CACHED && op!=DONGLE_RPC_OP_FEATURE) || !size || size>RPC_LIMIT || !length || offset>size || length>size-offset){
+    if((op!=DONGLE_RPC_OPERATION_SEND_ATT_REQUEST && op!=DONGLE_RPC_OPERATION_SEND_AACP_PACKET && op!=DONGLE_RPC_OPERATION_READ_CACHED_REPORT && op!=DONGLE_RPC_OPERATION_TYPED_FEATURE_REQUEST) || !size || size>RPC_LIMIT || !length || offset>size || length>size-offset){
         if(seq==c->sequence && busy)fail(client,MALFORMED);
         return;
     }
@@ -211,8 +211,8 @@ void dongle_rpc_poll(void) {
     dongle_att_poll();
     if(transport_owner>=0){
         unsigned owner=(unsigned)transport_owner;rpc_client_t *c=&clients[owner];uint16_t count=0;
-        int result=c->operation==DONGLE_RPC_OP_ATT?(int)dongle_att_take(c->payload,sizeof(c->payload),&count):
-            c->operation==DONGLE_RPC_OP_FEATURE?aacp_setting_take():aacp_research_take();
+        int result=c->operation==DONGLE_RPC_OPERATION_SEND_ATT_REQUEST?(int)dongle_att_take(c->payload,sizeof(c->payload),&count):
+            c->operation==DONGLE_RPC_OPERATION_TYPED_FEATURE_REQUEST?aacp_setting_take():aacp_research_take();
         if(result==1){c->total=count;c->phase=COMPLETE;c->page=0;c->dirty=true;transport_owner=-1;}
         else if(result==2)fail(owner,TRANSPORT);
     }
@@ -223,21 +223,21 @@ void dongle_rpc_poll(void) {
         // queue draining, transport progress and deadlines still run every poll.
         if(!c->dirty || !c->online)continue;
         uint8_t report[DONGLE_REPORT_SIZE];
-        dongle_header(report);report[DONGLE_HEADER_REPORT_ID_OFFSET]=DONGLE_RPC_REPORT_ID;
-        report[DONGLE_RPC_OPERATION_OFFSET]=c->operation;
-        dongle_put32(report+DONGLE_RPC_GENERATION_OFFSET,c->target);
-        dongle_put32(report+DONGLE_RPC_SEQUENCE_OFFSET,c->sequence);
-        report[DONGLE_RPC_PHASE_OFFSET]=c->phase;
-        if(c->phase==ASSEMBLING){put16(report+DONGLE_RPC_TOTAL_OFFSET,c->total);put16(report+DONGLE_RPC_OFFSET_OFFSET,c->received);}
+        dongle_header(report);report[DONGLE_HEADER_OFFSET_REPORT_ID]=DONGLE_RPC_REPORT_ID;
+        report[DONGLE_RPC_OFFSET_OPERATION]=c->operation;
+        dongle_put32(report+DONGLE_RPC_OFFSET_CONNECTION_GENERATION,c->target);
+        dongle_put32(report+DONGLE_RPC_OFFSET_TRANSACTION_SEQUENCE,c->sequence);
+        report[DONGLE_RPC_OFFSET_RESPONSE_PHASE]=c->phase;
+        if(c->phase==ASSEMBLING){put16(report+DONGLE_RPC_OFFSET_TOTAL_LENGTH,c->total);put16(report+DONGLE_RPC_OFFSET_FRAGMENT_OFFSET,c->received);}
         if(c->phase==COMPLETE){
             uint16_t count=c->total-c->page;if(count>CHUNK)count=CHUNK;
-            put16(report+DONGLE_RPC_TOTAL_OFFSET,c->total);put16(report+DONGLE_RPC_OFFSET_OFFSET,c->page);
-            report[DONGLE_RPC_LENGTH_OFFSET]=(uint8_t)count;
-            memcpy(report+DONGLE_RPC_PAYLOAD_OFFSET,c->payload+c->page,count);
+            put16(report+DONGLE_RPC_OFFSET_TOTAL_LENGTH,c->total);put16(report+DONGLE_RPC_OFFSET_FRAGMENT_OFFSET,c->page);
+            report[DONGLE_RPC_OFFSET_FRAGMENT_LENGTH]=(uint8_t)count;
+            memcpy(report+DONGLE_RPC_OFFSET_PAYLOAD,c->payload+c->page,count);
         }
         if(c->phase==FAILED){
-            put16(report+DONGLE_RPC_TOTAL_OFFSET,1);report[DONGLE_RPC_LENGTH_OFFSET]=1;
-            report[DONGLE_RPC_PAYLOAD_OFFSET]=c->failure;
+            put16(report+DONGLE_RPC_OFFSET_TOTAL_LENGTH,1);report[DONGLE_RPC_OFFSET_FRAGMENT_LENGTH]=1;
+            report[DONGLE_RPC_OFFSET_PAYLOAD]=c->failure;
         }
         uint32_t irq=save_and_disable_interrupts();memcpy(c->published,report,DONGLE_REPORT_SIZE);restore_interrupts(irq);
         c->dirty=false;

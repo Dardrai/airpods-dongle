@@ -39,9 +39,9 @@ static uint16_t radio_snapshot(uint8_t *out,uint16_t capacity) {
 #define AIRPODS_DONGLE_VERSION_PATCH 0
 #endif
 #ifdef AIRPODS_EXPERIMENTAL_RADIO0076
-#define AIRPODS_DONGLE_VARIANT DONGLE_VARIANT_RADIO0076
+#define AIRPODS_DONGLE_VARIANT DONGLE_FIRMWARE_VARIANT_RADIO0076
 #else
-#define AIRPODS_DONGLE_VARIANT DONGLE_VARIANT_STANDARD
+#define AIRPODS_DONGLE_VARIANT DONGLE_FIRMWARE_VARIANT_STANDARD
 #endif
 
 static uint16_t firmware_info(uint8_t *out,uint16_t capacity) {
@@ -71,86 +71,86 @@ uint8_t dongle_features_request(uint8_t client,const uint8_t *p,uint16_t size,
     // The request and response share bounded storage; consume request arguments first.
     uint8_t op=p[0],result;
     switch(op){
-        case DONGLE_FEATURE_SETTING_WRITE:
+        case DONGLE_FEATURE_WRITE_SETTING:
             if(size!=6)return DONGLE_RPC_ERROR_MALFORMED;
             return error(aacp_setting_write(p[1],dongle_u32(p+2)));
-        case DONGLE_FEATURE_SETTINGS_SNAPSHOT:
-            if(size!=1 && (size!=2 || p[1]!=DONGLE_SETTINGS_SNAPSHOT_EXTENDED))return DONGLE_RPC_ERROR_MALFORMED;
+        case DONGLE_FEATURE_READ_SETTINGS_SNAPSHOT:
+            if(size!=1 && (size!=2 || p[1]!=DONGLE_SETTINGS_SNAPSHOT_EXTENDED_SELECTOR))return DONGLE_RPC_ERROR_MALFORMED;
             *length=size==2 ? aacp_settings_snapshot_extended(out,capacity) : aacp_settings_snapshot(out,capacity);
             return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_AUDIO_PROFILE:
+        case DONGLE_FEATURE_CONFIGURE_AUDIO_PROFILE:
             if(size!=7 || capacity<20)return DONGLE_RPC_ERROR_MALFORMED;
             result=dongle_playback_configure(p[1],p[2],dongle_u32(p+3));
             if(result!=DONGLE_ACCEPTED)return error(result);
             *length=dongle_playback_status(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_GAME_MODE:
+        case DONGLE_FEATURE_SET_GAME_MODE:
             if(size!=2 || p[1]>1 || capacity<20)return DONGLE_RPC_ERROR_MALFORMED;
             result=dongle_playback_game_mode(p[1]!=0);
             if(result!=DONGLE_ACCEPTED)return error(result);
             *length=dongle_playback_status(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_PERFORMANCE:
+        case DONGLE_FEATURE_READ_PERFORMANCE:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=dongle_playback_diagnostics(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_FINDER_START:
+        case DONGLE_FEATURE_START_NEARBY_FINDER:
             if(size!=1 || capacity<24)return DONGLE_RPC_ERROR_MALFORMED;
             result=dongle_finder_start(client);
             if(result!=DONGLE_ACCEPTED)return error(result);
             *length=dongle_finder_snapshot(client,out,capacity);return *length?0:DONGLE_RPC_ERROR_BUSY;
-        case DONGLE_FEATURE_FINDER_STATUS:
+        case DONGLE_FEATURE_READ_NEARBY_FINDER:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=dongle_finder_snapshot(client,out,capacity);return *length?0:DONGLE_RPC_ERROR_BUSY;
-        case DONGLE_FEATURE_FINDER_STOP:
+        case DONGLE_FEATURE_STOP_NEARBY_FINDER:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             return error(dongle_finder_stop(client));
-        case DONGLE_FEATURE_AUDIO_PROFILE_STATUS:
+        case DONGLE_FEATURE_READ_AUDIO_PROFILE:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=dongle_playback_status(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_AUDIO_TRACE:
+        case DONGLE_FEATURE_READ_AUDIO_TRACE:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=dongle_playback_trace(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_BLE_SCAN_POLICY:
+        case DONGLE_FEATURE_SET_DIAGNOSTIC_BLE_SCAN:
             if(size!=2 || p[1]>1)return DONGLE_RPC_ERROR_MALFORMED;
             ble_scan_diagnostic_pause(p[1]==0);return 0;
-        case DONGLE_FEATURE_ELD_INSPECT:
+        case DONGLE_FEATURE_READ_AAC_ELD_INSPECTION:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=dongle_playback_inspect(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_ELD_INSPECT_ENABLE:
+        case DONGLE_FEATURE_ENABLE_AAC_ELD_INSPECTION:
             if(size!=2 || p[1]>1)return DONGLE_RPC_ERROR_MALFORMED;
             dongle_playback_inspect_enable(p[1]!=0);return 0;
-        case DONGLE_FEATURE_PHONE_INPUT:
+        case DONGLE_FEATURE_READ_PHONE_INPUT_COUNTERS:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=phone_sink_diagnostics(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_VOLUME_SNAPSHOT:
+        case DONGLE_FEATURE_READ_PHYSICAL_VOLUME:
             if(size!=1 || capacity<24)return DONGLE_RPC_ERROR_MALFORMED;
             *length=dongle_volume_snapshot(client,out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_VOLUME_AUTHORITY:
+        case DONGLE_FEATURE_USB_HOST_VOLUME_AUTHORITY:
             if(size!=7 || capacity<24 || p[1]>3 || p[6]>127 || (p[1]!=3 && p[6]) ||
                 (!p[1] && dongle_u32(p+2)) || (p[1] && !dongle_u32(p+2))) return DONGLE_RPC_ERROR_MALFORMED;
             if(client!=DONGLE_CLIENT_USB)return DONGLE_RPC_ERROR_UNSUPPORTED;
             return error(dongle_volume_request(client,p,size,out,capacity,length));
-        case DONGLE_FEATURE_FLUSH_COMPARISON:
+        case DONGLE_FEATURE_DIAGNOSTIC_FLUSH_COMPARISON:
             if(size!=2 || p[1]>1)return DONGLE_RPC_ERROR_MALFORMED;
             if(client!=DONGLE_CLIENT_USB)return DONGLE_RPC_ERROR_UNSUPPORTED;
             return bt_hci_airpods_flush_comparison(p[1]!=0)?0:DONGLE_RPC_ERROR_BUSY;
-        case DONGLE_FEATURE_RADIO:
+        case DONGLE_FEATURE_READ_RADIO_AND_BITRATE:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=radio_snapshot(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_ROUTING_STATUS:
+        case DONGLE_FEATURE_READ_ROUTING_STATUS:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=dongle_routing_snapshot(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
-        case DONGLE_FEATURE_ROUTING_HANDOVER:
+        case DONGLE_FEATURE_REQUEST_ROUTING_HANDOVER:
             if(size!=10 || capacity<32)return DONGLE_RPC_ERROR_MALFORMED;
             result=dongle_routing_request(p[1],dongle_u32(p+2),dongle_u32(p+6));
             if(result!=DONGLE_ACCEPTED)return error(result);
             *length=dongle_routing_snapshot(out,capacity);return *length?0:DONGLE_RPC_ERROR_UNSUPPORTED;
         case DONGLE_FEATURE_RECONNECT_POLICY: {
-            if ((size!=1 && size!=2) || capacity<2 || (size==2 && p[1]>DONGLE_RECONNECT_AUTOMATIC)) return DONGLE_RPC_ERROR_MALFORMED;
+            if ((size!=1 && size!=2) || capacity<2 || (size==2 && p[1]>DONGLE_RECONNECT_POLICY_AUTOMATIC)) return DONGLE_RPC_ERROR_MALFORMED;
             bool automatic=false;
             result=dongle_reconnect_policy(size==2,size==2 && p[1]!=0,&automatic);
             if (result!=DONGLE_ACCEPTED) return error(result);
-            out[0]=1;out[1]=automatic?DONGLE_RECONNECT_AUTOMATIC:DONGLE_RECONNECT_MANUAL;*length=2;return 0;
+            out[0]=1;out[1]=automatic?DONGLE_RECONNECT_POLICY_AUTOMATIC:DONGLE_RECONNECT_POLICY_MANUAL;*length=2;return 0;
         }
-        case DONGLE_FEATURE_FIRMWARE_VERSION:
+        case DONGLE_FEATURE_READ_FIRMWARE_VERSION:
             if(size!=1)return DONGLE_RPC_ERROR_MALFORMED;
             *length=firmware_info(out,capacity);return *length?0:DONGLE_RPC_ERROR_MALFORMED;
         default:return DONGLE_RPC_ERROR_UNSUPPORTED;

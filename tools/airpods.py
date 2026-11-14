@@ -12,7 +12,7 @@ from airpods_hearing import HearingSettings, PARAMETERS
 import airpods_hearing
 # Setting IDs, value names and encodings are generated from protocol/dongle-protocol.json;
 # model gating stays in firmware.
-from dongle_protocol import EXTENDED_SETTINGS, HOLD_ACTIONS as HOLD, HOLD_MODE_BITS, HOLD_MODE_MIN_BITS
+from dongle_protocol import EXTENDED_SETTINGS, HOLD_ACTIONS as HOLD, HOLD_MODE_BITS, HOLD_MODE_MINIMUM_SELECTED
 from dongle_protocol import PERCENT_FLAGS, SETTINGS, TOGGLE
 
 
@@ -51,7 +51,7 @@ def encode(name, value):
         return int(value) | PERCENT_FLAGS.get(control, 0)
     parts = value.split(',')
     if kind == 'modes':
-        if (len(parts) < HOLD_MODE_MIN_BITS or len(set(parts)) != len(parts) or
+        if (len(parts) < HOLD_MODE_MINIMUM_SELECTED or len(set(parts)) != len(parts) or
                 any(p not in HOLD_MODE_BITS for p in parts)):
             raise ValueError(value_help(name))
         return sum(HOLD_MODE_BITS[p] for p in parts)
@@ -71,7 +71,7 @@ def decode(name, raw):
         if raw == (value | PERCENT_FLAGS.get(control, 0)) and value <= 100:
             return str(value)
     elif (kind == 'modes' and not raw & ~sum(HOLD_MODE_BITS.values()) and
-          raw.bit_count() >= HOLD_MODE_MIN_BITS):
+          raw.bit_count() >= HOLD_MODE_MINIMUM_SELECTED):
         return ','.join(word for word, bit in HOLD_MODE_BITS.items() if raw & bit)
     elif kind == 'actions':
         actions = {v: k for k, v in HOLD.items()}

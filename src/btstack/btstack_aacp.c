@@ -167,11 +167,11 @@ static cached_report_t reports[] = {
 };
 static dongle_readback_t control_readback;
 static dongle_settings_t settings;
-static uint8_t setting_tx[AACP_CONTROL_PACKET_SIZE];
+static uint8_t setting_tx[AACP_CONTROL_COMMAND_SIZE];
 static uint32_t setting_since;
 static bool setting_pending;
 static int setting_result;
-static uint8_t receive_buffer_tx[AACP_CONTROL_PACKET_SIZE];
+static uint8_t receive_buffer_tx[AACP_CONTROL_COMMAND_SIZE];
 static uint32_t receive_buffer_serial;
 static uint16_t receive_buffer_last;
 static uint8_t pair_irk[16], pair_advertising_key[16], pair_key_address[6];
@@ -192,10 +192,10 @@ static void routing_packet(const uint8_t *packet, uint16_t size);
 static void routing_cancel(void);
 static void routing_authority(bool allowed);
 // Static entries stay valid until their queued transmission completes.
-static const uint8_t control_anc[] = {AACP_HEADER_BYTES,AACP_OP_CONTROL,0,
-    DONGLE_SETTING_LISTENING_MODE,DONGLE_LISTENING_ANC,0,0,0};
-static const uint8_t control_transparency[] = {AACP_HEADER_BYTES,AACP_OP_CONTROL,0,
-    DONGLE_SETTING_LISTENING_MODE,DONGLE_LISTENING_TRANSPARENCY,0,0,0};
+static const uint8_t control_anc[] = {AACP_HEADER_BYTES,AACP_OPCODE_CONTROL_COMMAND,0,
+    DONGLE_SETTING_LISTENING_MODE,DONGLE_LISTENING_MODE_ANC,0,0,0};
+static const uint8_t control_transparency[] = {AACP_HEADER_BYTES,AACP_OPCODE_CONTROL_COMMAND,0,
+    DONGLE_SETTING_LISTENING_MODE,DONGLE_LISTENING_MODE_TRANSPARENCY,0,0,0};
 static void control_reset(void) {
     ++control_session;
     dongle_readback_clear(&control_readback);
@@ -578,9 +578,9 @@ uint8_t aacp_receive_buffer(uint16_t milliseconds) {
     for (unsigned i=0;i<aacp_tx_count;++i)
         if (aacp_tx_queue[(aacp_tx_head+i)%AACP_TX_QUEUE_LEN].data==receive_buffer_tx) return DONGLE_BUSY;
     if (l2cap_get_remote_mtu_for_local_cid(aacp_cid)<sizeof(receive_buffer_tx)) return DONGLE_UNSUPPORTED;
-    memcpy(receive_buffer_tx,AACP_CONTROL_HEADER,AACP_CONTROL_HEADER_SIZE);
-    receive_buffer_tx[AACP_CONTROL_ID_OFFSET]=AACP_CONTROL_RECEIVE_BUFFER;
-    dongle_put32(receive_buffer_tx+AACP_CONTROL_VALUE_OFFSET,milliseconds);
+    memcpy(receive_buffer_tx,AACP_CONTROL_COMMAND_HEADER,AACP_CONTROL_COMMAND_HEADER_SIZE);
+    receive_buffer_tx[AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER]=AACP_CONTROL_RECEIVE_BUFFER;
+    dongle_put32(receive_buffer_tx+AACP_CONTROL_COMMAND_OFFSET_VALUE,milliseconds);
     return aacp_tx_enqueue(receive_buffer_tx,sizeof(receive_buffer_tx)) ? DONGLE_ACCEPTED : DONGLE_BUSY;
 }
 bool aacp_pair_irk(uint8_t address[6], uint8_t key[16]) {
@@ -624,8 +624,8 @@ uint8_t aacp_setting_write(uint8_t id, uint32_t value) {
         aacp_tx_count>=AACP_TX_QUEUE_LEN-2)
         return DONGLE_BUSY;
     if (l2cap_get_remote_mtu_for_local_cid(aacp_cid)<sizeof(setting_tx)) return DONGLE_UNSUPPORTED;
-    memcpy(setting_tx,AACP_CONTROL_HEADER,AACP_CONTROL_HEADER_SIZE);
-    setting_tx[AACP_CONTROL_ID_OFFSET]=id; dongle_put32(setting_tx+AACP_CONTROL_VALUE_OFFSET,value);
+    memcpy(setting_tx,AACP_CONTROL_COMMAND_HEADER,AACP_CONTROL_COMMAND_HEADER_SIZE);
+    setting_tx[AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER]=id; dongle_put32(setting_tx+AACP_CONTROL_COMMAND_OFFSET_VALUE,value);
     setting_since=btstack_run_loop_get_time_ms();
     setting_pending=true;
     if (!aacp_tx_enqueue(setting_tx,sizeof(setting_tx))) {
@@ -660,14 +660,14 @@ uint16_t aacp_settings_snapshot_extended(uint8_t *out, uint16_t capacity) {
 }
 bool aacp_control_anc(uint8_t mode) {
     if (!aacp_control_ready() || !control_readback.anc ||
-        (mode != DONGLE_LISTENING_ANC && mode != DONGLE_LISTENING_TRANSPARENCY)) return false;
+        (mode != DONGLE_LISTENING_MODE_ANC && mode != DONGLE_LISTENING_MODE_TRANSPARENCY)) return false;
     // Keep capacity for microphone STOP and recovery even if a host floods controls.
     for (unsigned i = 0; i < aacp_tx_count; ++i) {
         const uint8_t *p = aacp_tx_queue[(aacp_tx_head + i) % AACP_TX_QUEUE_LEN].data;
         if (p == control_anc || p == control_transparency) return false;
     }
     if (aacp_tx_count >= AACP_TX_QUEUE_LEN - 2) return false;
-    return aacp_tx_enqueue(mode == DONGLE_LISTENING_ANC ? control_anc : control_transparency, sizeof(control_anc));
+    return aacp_tx_enqueue(mode == DONGLE_LISTENING_MODE_ANC ? control_anc : control_transparency, sizeof(control_anc));
 }
 
 void aacp_research_cancel(void) {
@@ -683,22 +683,22 @@ void aacp_research_cancel(void) {
     research_eq_revision = 0;
 }
 static bool eq_report_valid(const uint8_t *p, uint16_t n) {
-    static const uint8_t prefix[]={AACP_HEADER_BYTES,AACP_OP_EQ,0,5,0,1};
+    static const uint8_t prefix[]={AACP_HEADER_BYTES,AACP_OPCODE_EQUALIZER,0,5,0,1};
     return p && n==13 && !memcmp(p,prefix,sizeof(prefix)) && (p[9]==1 || p[9]==2) &&
         p[10]<=100 && p[11]<=100 && p[12]<=100;
 }
 static bool research_valid(const uint8_t *p, uint16_t n) {
     if (!p || n < 6 || n > sizeof(research_tx) || memcmp(p, AACP_HEADER, AACP_HEADER_SIZE) || p[5]) return false;
-    if (p[AACP_OPCODE_OFFSET]==AACP_OP_EQ)
+    if (p[AACP_OFFSET_OPCODE]==AACP_OPCODE_EQUALIZER)
         return eq_report_valid(p,n) && settings.profile && reports[5].length==sizeof(eq_report);
-    if (p[AACP_OPCODE_OFFSET] == AACP_OP_CONTROL && n == AACP_CONTROL_PACKET_SIZE && p[9] == 0 && p[10] == 0) {
-        uint8_t id = p[AACP_CONTROL_ID_OFFSET];
+    if (p[AACP_OFFSET_OPCODE] == AACP_OPCODE_CONTROL_COMMAND && n == AACP_CONTROL_COMMAND_SIZE && p[9] == 0 && p[10] == 0) {
+        uint8_t id = p[AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER];
         if (id == AACP_CONTROL_HEARING_AID) return p[7] <= 2 && (p[8] == 1 || p[8] == 2);
-        if (id == AACP_CONTROL_ASSIST_GATE) return (p[7] == 1 || p[7] == 2) && p[8] == 0;
+        if (id == AACP_CONTROL_HEARING_ASSISTANCE_GATE) return (p[7] == 1 || p[7] == 2) && p[8] == 0;
         if (id == DONGLE_SETTING_LISTENING_MODE)
-            return (p[7] == DONGLE_LISTENING_ANC || p[7] == DONGLE_LISTENING_TRANSPARENCY) && p[8] == 0;
+            return (p[7] == DONGLE_LISTENING_MODE_ANC || p[7] == DONGLE_LISTENING_MODE_TRANSPARENCY) && p[8] == 0;
     }
-    if (p[AACP_OPCODE_OFFSET] == AACP_OP_PME) return n == 140 && p[6] == 0x84 && p[7] == 0 && p[8] == 2 &&
+    if (p[AACP_OFFSET_OPCODE] == AACP_OPCODE_PME) return n == 140 && p[6] == 0x84 && p[7] == 0 && p[8] == 2 &&
         p[9] <= 2 && (p[10] == 1 || p[10] == 2) && (p[11] == 1 || p[11] == 2);
     if (p[4] == 0x0f) return n == sizeof(aacp_request_notifications) &&
         memcmp(p, aacp_request_notifications, n) == 0;
@@ -714,7 +714,7 @@ bool aacp_research_send(const uint8_t *packet, uint16_t length) {
     if (!aacp_control_ready() || research_pending || research_result || !research_valid(packet, length) ||
         aacp_tx_count >= AACP_TX_QUEUE_LEN - 2 || length > l2cap_get_remote_mtu_for_local_cid(aacp_cid)) return false;
     memcpy(research_tx, packet, length);
-    research_eq_revision = packet[AACP_OPCODE_OFFSET]==AACP_OP_EQ ? reports[5].revision : 0;
+    research_eq_revision = packet[AACP_OFFSET_OPCODE]==AACP_OPCODE_EQUALIZER ? reports[5].revision : 0;
     research_since = btstack_run_loop_get_time_ms();
     research_pending = true;
     if (aacp_tx_enqueue(research_tx, length)) return true;
@@ -727,31 +727,32 @@ int aacp_research_take(void) {
     return result;
 }
 uint16_t aacp_research_cached(uint8_t slot, uint8_t *out, uint16_t capacity) {
-    if (slot==DONGLE_CACHED_SETTINGS_SNAPSHOT) return aacp_settings_snapshot(out,capacity);
+    if (slot==DONGLE_CACHED_REPORT_SETTINGS_SNAPSHOT) return aacp_settings_snapshot(out,capacity);
     // The EQ report occupies the sixth raw cache entry; slot 6 remains the scalar snapshot.
-    if (slot==DONGLE_CACHED_EQ) slot=DONGLE_CACHED_SETTINGS_SNAPSHOT;
+    if (slot==DONGLE_CACHED_REPORT_EQUALIZER) slot=DONGLE_CACHED_REPORT_SETTINGS_SNAPSHOT;
     if (!aacp_control_ready() || slot < 1 || slot > sizeof(reports) / sizeof(reports[0]) || !out) return 0;
     cached_report_t *report = &reports[slot - 1];
-    if (!report->length || capacity < report->length + DONGLE_CACHED_ENVELOPE_SIZE) return 0;
+    if (!report->length || capacity < report->length + DONGLE_CACHED_REPORT_ENVELOPE_SIZE) return 0;
     dongle_put32(out, btstack_run_loop_get_time_ms() - report->updated);
     dongle_put32(out + 4, report->revision);
-    memcpy(out + DONGLE_CACHED_ENVELOPE_SIZE, report->packet, report->length);
-    return report->length + DONGLE_CACHED_ENVELOPE_SIZE;
+    memcpy(out + DONGLE_CACHED_REPORT_ENVELOPE_SIZE, report->packet, report->length);
+    return report->length + DONGLE_CACHED_REPORT_ENVELOPE_SIZE;
 }
 static void research_cache(const uint8_t *p, uint16_t n) {
     int slot = -1;
     // Raw cache index is the cached-report slot minus one.
-    uint8_t op = p[AACP_OPCODE_OFFSET];
-    if (op == AACP_OP_METADATA) slot = DONGLE_CACHED_MODEL - 1;
-    else if (op == AACP_OP_CONTROL && n >= 7 && p[AACP_CONTROL_ID_OFFSET] == AACP_CONTROL_HEARING_AID)
-        slot = DONGLE_CACHED_HEARING_AID - 1;
-    else if (op == AACP_OP_CONTROL && n >= 7 && p[AACP_CONTROL_ID_OFFSET] == AACP_CONTROL_ASSIST_GATE)
-        slot = DONGLE_CACHED_ASSIST_GATE - 1;
-    else if (op == AACP_OP_PME) {
+    uint8_t opcode = p[AACP_OFFSET_OPCODE];
+    if (opcode == AACP_OPCODE_DEVICE_METADATA) slot = DONGLE_CACHED_REPORT_MODEL_METADATA - 1;
+    else if (opcode == AACP_OPCODE_CONTROL_COMMAND && n >= 7 && p[AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER] == AACP_CONTROL_HEARING_AID)
+        slot = DONGLE_CACHED_REPORT_HEARING_AID - 1;
+    else if (opcode == AACP_OPCODE_CONTROL_COMMAND && n >= 7 && p[AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER] == AACP_CONTROL_HEARING_ASSISTANCE_GATE)
+        slot = DONGLE_CACHED_REPORT_HEARING_ASSISTANCE_GATE - 1;
+    else if (opcode == AACP_OPCODE_PME) {
         if (n == 10 && p[6] == 2 && p[7] == 0 && p[8] == 1) return;
-        slot = DONGLE_CACHED_PME - 1;
-    } else if (op == AACP_OP_EAR_STATE) slot = DONGLE_CACHED_EAR_STATE - 1;
-    else if (op == AACP_OP_EQ) slot = DONGLE_CACHED_SETTINGS_SNAPSHOT - 1;
+        slot = DONGLE_CACHED_REPORT_PME - 1;
+    } else if (opcode == AACP_OPCODE_EAR_STATE) slot = DONGLE_CACHED_REPORT_EAR_STATE - 1;
+    // Slot 6 is the generated scalar snapshot, so the equalizer report takes the sixth raw entry.
+    else if (opcode == AACP_OPCODE_EQUALIZER) slot = DONGLE_CACHED_REPORT_EQUALIZER - 2;
     if (slot < 0) return;
     cached_report_t *report = &reports[slot];
     if (++report->revision == 0) ++report->revision;
@@ -919,7 +920,7 @@ static void aacp_handle_can_send_now(void) {
     }
     if ((p.data==setting_tx || p.data==research_tx) &&
         (!dongle_rpc_transport_current() || aacp_mic_requested() || aacp_mic_active() ||
-         (p.data==research_tx && research_tx[AACP_OPCODE_OFFSET]==AACP_OP_EQ &&
+         (p.data==research_tx && research_tx[AACP_OFFSET_OPCODE]==AACP_OPCODE_EQUALIZER &&
           (research_eq_revision!=reports[5].revision || !research_valid(p.data,p.len))) ||
          (uint32_t)(now-(p.data==setting_tx ? setting_since : research_since))>=3000u)) {
         if (p.data==setting_tx) {
@@ -967,9 +968,9 @@ static void aacp_handle_can_send_now(void) {
     aacp_tx_head = (uint8_t)((aacp_tx_head + 1) % AACP_TX_QUEUE_LEN);
     aacp_tx_count--;
     // Pro 3 can leave Allow Off unreported; a sent choice is not a device report.
-    if (p.data==setting_tx && setting_tx[AACP_CONTROL_ID_OFFSET]==DONGLE_SETTING_ALLOW_OFF &&
+    if (p.data==setting_tx && setting_tx[AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER]==DONGLE_SETTING_ALLOW_OFF &&
         settings.profile && settings.profile->silent_allow_off)
-        settings.allow_off_requested=dongle_u32(setting_tx+AACP_CONTROL_VALUE_OFFSET)==DONGLE_SETTING_ALLOW_OFF_ON;
+        settings.allow_off_requested=dongle_u32(setting_tx+AACP_CONTROL_COMMAND_OFFSET_VALUE)==DONGLE_SETTING_ALLOW_OFF_ON;
     if (p.data==setting_tx) {
         setting_pending=false; setting_result=1;
         dongle_playback_accessory_event(setting_tx,sizeof(setting_tx));
@@ -1111,7 +1112,7 @@ static unsigned aacp_capability_width(uint8_t id) {
     }
 }
 static bool aacp_capabilities_valid(const uint8_t *p,uint16_t n) {
-    if (n<7 || n>327 || p[AACP_OPCODE_OFFSET]!=AACP_OP_CAPABILITIES || p[5]) return false;
+    if (n<7 || n>327 || p[AACP_OFFSET_OPCODE]!=AACP_OPCODE_CAPABILITIES || p[5]) return false;
     uint8_t seen[32]={0};
     unsigned offset=7;
     for (unsigned i=0;i<p[6];++i) {
@@ -1125,25 +1126,25 @@ static bool aacp_capabilities_valid(const uint8_t *p,uint16_t n) {
 }
 static bool aacp_legacy_control_valid(const uint8_t *p,uint16_t n) {
     if (p[5]) return false;
-    if (p[AACP_OPCODE_OFFSET]==AACP_OP_CONTROL && n==AACP_CONTROL_PACKET_SIZE) {
+    if (p[AACP_OFFSET_OPCODE]==AACP_OPCODE_CONTROL_COMMAND && n==AACP_CONTROL_COMMAND_SIZE) {
         bool owned;
-        uint8_t id=p[AACP_CONTROL_ID_OFFSET];
-        uint32_t value=dongle_u32(p+AACP_CONTROL_VALUE_OFFSET);
+        uint8_t id=p[AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER];
+        uint32_t value=dongle_u32(p+AACP_CONTROL_COMMAND_OFFSET_VALUE);
         // Received upper bytes are previous actions, as in settings_packet.
         if (id==DONGLE_SETTING_HOLD_ACTIONS) value&=DONGLE_SETTING_HOLD_ACTIONS_REPORT_MASK;
         return aacp_route_ownership(p,n,&owned) ||
             (setting_index(id)>=0 && setting_value_valid(id,value));
     }
-    if (p[AACP_OPCODE_OFFSET]!=AACP_OP_BATTERY || n<7) return false;
-    uint8_t count=p[AACP_BATTERY_COUNT_OFFSET];
-    if (!count || count>3 || n!=AACP_BATTERY_ENTRIES_OFFSET+AACP_BATTERY_ENTRY_SIZE*count) return false;
+    if (p[AACP_OFFSET_OPCODE]!=AACP_OPCODE_BATTERY_REPORT || n<7) return false;
+    uint8_t count=p[AACP_BATTERY_OFFSET_COUNT];
+    if (!count || count>3 || n!=AACP_BATTERY_OFFSET_ENTRIES+AACP_BATTERY_ENTRY_SIZE*count) return false;
     unsigned seen=0;
     for (unsigned i=0;i<count;++i) {
-        const uint8_t *battery=p+AACP_BATTERY_ENTRIES_OFFSET+AACP_BATTERY_ENTRY_SIZE*i;
-        uint8_t component=battery[AACP_BATTERY_COMPONENT_OFFSET], level=battery[AACP_BATTERY_LEVEL_OFFSET];
-        unsigned bit=component==AACP_BATTERY_LEFT ? DONGLE_COMPONENT_LEFT_BIT :
-                     component==AACP_BATTERY_RIGHT ? DONGLE_COMPONENT_RIGHT_BIT :
-                     component==AACP_BATTERY_CASE ? DONGLE_COMPONENT_CASE_BIT : 0u;
+        const uint8_t *battery=p+AACP_BATTERY_OFFSET_ENTRIES+AACP_BATTERY_ENTRY_SIZE*i;
+        uint8_t component=battery[AACP_BATTERY_ENTRY_OFFSET_COMPONENT], level=battery[AACP_BATTERY_ENTRY_OFFSET_LEVEL_PERCENT];
+        unsigned bit=component==AACP_BATTERY_COMPONENT_LEFT ? DONGLE_COMPONENT_BIT_LEFT :
+                     component==AACP_BATTERY_COMPONENT_RIGHT ? DONGLE_COMPONENT_BIT_RIGHT :
+                     component==AACP_BATTERY_COMPONENT_CASE ? DONGLE_COMPONENT_BIT_CASE : 0u;
         if (!bit || (seen&bit) || (level>100 && level!=AACP_BATTERY_LEVEL_UNKNOWN)) return false;
         seen|=bit;
     }
@@ -1218,23 +1219,23 @@ static void aacp_packet_handler(uint8_t type, uint16_t channel, uint8_t *packet,
         } else {
             routing_packet(packet, size);
             settings_packet(&settings,packet,size,btstack_run_loop_get_time_ms());
-            uint8_t op=packet[AACP_OPCODE_OFFSET];
-            if (op==AACP_OP_METADATA)
+            uint8_t opcode=packet[AACP_OFFSET_OPCODE];
+            if (opcode==AACP_OPCODE_DEVICE_METADATA)
                 pair_case_supported=!packet[5] && settings.profile &&
                     settings.profile->models[0]==DONGLE_CASE_BATTERY_PROFILE_MODEL && settings.firmware_major;
-            if (op==AACP_OP_KEYS) pair_keys_report(packet,size);
-            if (size>=7 && op==AACP_OP_CONTROL && packet[5]==0 &&
-                packet[AACP_CONTROL_ID_OFFSET]==DONGLE_SETTING_LISTENING_MODE) {
+            if (opcode==AACP_OPCODE_KEY_REPORT) pair_keys_report(packet,size);
+            if (size>=7 && opcode==AACP_OPCODE_CONTROL_COMMAND && packet[5]==0 &&
+                packet[AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER]==DONGLE_SETTING_LISTENING_MODE) {
                 const setting_report_t *anc=&settings.reports[setting_index(DONGLE_SETTING_LISTENING_MODE)];
                 control_readback.anc=anc->known ? (uint8_t)anc->value : 0;
             }
             research_cache(packet, size);
             dongle_readback_packet(&control_readback, packet, size, dongle_uptime_ms());
             if((settings.profile && settings.firmware_major) ||
-               (size==AACP_CONTROL_PACKET_SIZE && op==AACP_OP_CONTROL))
+               (size==AACP_CONTROL_COMMAND_SIZE && opcode==AACP_OPCODE_CONTROL_COMMAND))
                 dongle_playback_accessory_event(packet,size);
             if (aacp_capabilities_valid(packet,size) || aacp_legacy_control_valid(packet,size) ||
-                (op==AACP_OP_METADATA && !packet[5] && settings.profile && settings.firmware_major))
+                (opcode==AACP_OPCODE_DEVICE_METADATA && !packet[5] && settings.profile && settings.firmware_major))
                 aacp_got_control = true;
             aacp_try_mic_start();
         }

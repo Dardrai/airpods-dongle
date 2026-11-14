@@ -1,5 +1,5 @@
 {
-  "$comment": "Single source of truth for the dongle control protocol. Edit this file, then run: python3 tools/gen_protocol.py. All integers are decimal JSON numbers; multi-byte wire fields are little-endian. Lists that carry names are ordered arrays, never objects, so every language keeps their order.",
+  "$comment": "Single source of truth for the dongle control protocol. Edit this file, then run: python3 tools/gen_protocol.py. All integers are decimal JSON numbers; multi-byte wire fields are little-endian. Lists that carry names are ordered arrays, never objects, so every language keeps their order. Every \"name\" is the canonical lower_snake identifier (whole words, named for meaning); generators derive each language's casing from it. CLI names and value names under settings[].domain are user-facing strings and keep their kebab-case.",
   "name": "airpods-dongle-control",
   "protocol_version": 1,
   "byte_order": "little",
@@ -18,35 +18,35 @@
     "command": {
       "fields": [
         {"name": "opcode", "offset": 7, "size": 1},
-        {"name": "generation", "offset": 8, "size": 4},
-        {"name": "address", "offset": 12, "size": 6},
-        {"name": "sequence", "offset": 18, "size": 4},
+        {"name": "connection_generation", "offset": 8, "size": 4},
+        {"name": "selected_address", "offset": 12, "size": 6},
+        {"name": "command_sequence", "offset": 18, "size": 4},
         {"name": "argument", "offset": 22, "size": 1},
         {"name": "reserved", "offset": 23, "size": 41}
       ],
       "opcodes": [
-        {"name": "reconnect", "value": 1, "arguments": [0]},
-        {"name": "pair", "value": 2, "arguments": [0]},
-        {"name": "listening_mode", "value": 3, "arguments": [2, 3]},
-        {"name": "phone_pairing", "value": 4, "arguments": [0]}
+        {"name": "reconnect_airpods", "value": 1, "arguments": [0]},
+        {"name": "pair_airpods", "value": 2, "arguments": [0]},
+        {"name": "change_listening_mode", "value": 3, "arguments": [2, 3]},
+        {"name": "open_phone_pairing", "value": 4, "arguments": [0]}
       ]
     },
     "status": {
       "fields": [
         {"name": "flags", "offset": 7, "size": 1},
-        {"name": "generation", "offset": 8, "size": 4},
-        {"name": "address", "offset": 12, "size": 6},
+        {"name": "connection_generation", "offset": 8, "size": 4},
+        {"name": "selected_address", "offset": 12, "size": 6},
         {"name": "listening_mode", "offset": 18, "size": 1},
-        {"name": "battery", "offset": 19, "size": 3},
-        {"name": "charging", "offset": 22, "size": 1},
-        {"name": "codec", "offset": 23, "size": 1},
-        {"name": "battery_ages", "offset": 24, "size": 12},
-        {"name": "last_sequence", "offset": 36, "size": 4},
-        {"name": "result", "offset": 40, "size": 1},
-        {"name": "last_opcode", "offset": 41, "size": 1},
+        {"name": "battery_percent", "offset": 19, "size": 3},
+        {"name": "charging_components", "offset": 22, "size": 1},
+        {"name": "output_codec", "offset": 23, "size": 1},
+        {"name": "battery_ages_milliseconds", "offset": 24, "size": 12},
+        {"name": "last_command_sequence", "offset": 36, "size": 4},
+        {"name": "last_command_result", "offset": 40, "size": 1},
+        {"name": "last_command_opcode", "offset": 41, "size": 1},
         {"name": "capabilities", "offset": 42, "size": 2},
-        {"name": "present", "offset": 44, "size": 1},
-        {"name": "case_source", "offset": 45, "size": 1},
+        {"name": "present_components", "offset": 44, "size": 1},
+        {"name": "case_observed_components", "offset": 45, "size": 1},
         {"name": "reserved", "offset": 46, "size": 18}
       ],
       "flags": [
@@ -59,16 +59,20 @@
         {"name": "usb_playback", "value": 64}
       ],
       "capabilities": [
-        {"name": "pair_reconnect", "value": 1},
-        {"name": "noise_control", "value": 2, "conditional": "set only while a listening mode has been reported"},
+        {"name": "pair_and_reconnect", "value": 1},
+        {
+          "name": "confirmed_noise_control",
+          "value": 2,
+          "conditional": "set only while a listening mode has been reported"
+        },
         {"name": "phone_pairing", "value": 4},
         {"name": "settings_transport", "value": 8},
         {"name": "typed_features", "value": 16},
-        {"name": "settings_lease", "value": 32},
-        {"name": "battery_observation", "value": 64},
-        {"name": "host_volume_authority", "value": 128},
-        {"name": "runtime_update", "value": 256},
-        {"name": "routing_handover", "value": 512}
+        {"name": "settings_workflow_lease", "value": 32},
+        {"name": "battery_observation_flags", "value": 64},
+        {"name": "usb_host_volume_authority", "value": 128},
+        {"name": "active_audio_runtime_update", "value": 256},
+        {"name": "explicit_routing_handover", "value": 512}
       ],
       "battery_unknown": 255,
       "age_unknown": 4294967295,
@@ -105,26 +109,24 @@
   },
   "rpc": {
     "report_id": 3,
-    "chunk": 42,
-    "payload_limit": 512,
     "fields": [
       {"name": "operation", "offset": 7, "size": 1},
-      {"name": "generation", "offset": 8, "size": 4},
-      {"name": "sequence", "offset": 12, "size": 4},
-      {"name": "total", "offset": 16, "size": 2},
-      {"name": "offset", "offset": 18, "size": 2},
-      {"name": "length", "offset": 20, "size": 1},
-      {"name": "phase", "offset": 21, "size": 1},
+      {"name": "connection_generation", "offset": 8, "size": 4},
+      {"name": "transaction_sequence", "offset": 12, "size": 4},
+      {"name": "total_length", "offset": 16, "size": 2},
+      {"name": "fragment_offset", "offset": 18, "size": 2},
+      {"name": "fragment_length", "offset": 20, "size": 1},
+      {"name": "response_phase", "offset": 21, "size": 1},
       {"name": "payload", "offset": 22, "size": 42}
     ],
     "operations": [
-      {"name": "att", "value": 1, "upload": true},
-      {"name": "aacp", "value": 2, "upload": true},
-      {"name": "cached", "value": 3, "upload": true},
-      {"name": "page", "value": 4, "upload": false},
-      {"name": "cancel", "value": 5, "upload": false},
-      {"name": "commit", "value": 6, "upload": false},
-      {"name": "feature", "value": 7, "upload": true}
+      {"name": "send_att_request", "value": 1, "upload": true},
+      {"name": "send_aacp_packet", "value": 2, "upload": true},
+      {"name": "read_cached_report", "value": 3, "upload": true},
+      {"name": "select_response_page", "value": 4, "upload": false},
+      {"name": "cancel_transaction", "value": 5, "upload": false},
+      {"name": "commit_transaction", "value": 6, "upload": false},
+      {"name": "typed_feature_request", "value": 7, "upload": true}
     ],
     "phases": [
       {"name": "idle", "value": 0},
@@ -151,12 +153,13 @@
       {"result": "unsupported", "error": "unsupported"},
       {"result": "transport", "error": "transport"},
       {"result": "malformed", "error": "malformed"}
-    ]
+    ],
+    "maximum_fragment_length": 42,
+    "maximum_payload_length": 512
   },
   "phone_transport": {
     "uuid": "c6c4f8a0-6d47-4bd1-9b6a-415044470001",
     "header_size": 8,
-    "frame_max": 72,
     "fields": [
       {"name": "magic", "offset": 0, "size": 4},
       {"name": "version", "offset": 4, "size": 1},
@@ -164,136 +167,116 @@
       {"name": "report_id", "offset": 6, "size": 1},
       {"name": "length", "offset": 7, "size": 1}
     ],
-    "operations": [
-      {"name": "read", "value": 1, "length": 0},
-      {"name": "write", "value": 2, "length": 64}
-    ],
-    "response_flag": 128,
+    "operations": [{"name": "read_report", "value": 1, "length": 0}, {"name": "write_report", "value": 2, "length": 64}],
     "error_operation": 255,
     "errors": [
       {"name": "malformed", "value": 1, "reserved": true},
       {"name": "busy", "value": 2},
       {"name": "unavailable", "value": 3}
-    ]
+    ],
+    "maximum_frame_size": 72,
+    "response_operation_flag": 128
   },
   "features": [
-    {"name": "setting_write", "value": 1, "request_size": 6},
-    {"name": "settings_snapshot", "value": 2, "request_size": [1, 2]},
-    {"name": "audio_profile", "value": 3, "request_size": 7},
-    {"name": "game_mode", "value": 4, "request_size": 2},
-    {"name": "performance", "value": 5, "request_size": 1},
-    {"name": "finder_start", "value": 6, "request_size": 1},
-    {"name": "finder_status", "value": 7, "request_size": 1},
-    {"name": "finder_stop", "value": 8, "request_size": 1},
-    {"name": "audio_profile_status", "value": 9, "request_size": 1},
-    {"name": "settings_lease", "value": 10, "request_size": 6},
-    {"name": "audio_trace", "value": 11, "request_size": 1},
-    {"name": "ble_scan_policy", "value": 12, "request_size": 2},
-    {"name": "eld_inspect", "value": 13, "request_size": 1},
-    {"name": "eld_inspect_enable", "value": 14, "request_size": 2},
-    {"name": "phone_input", "value": 15, "request_size": 1},
-    {"name": "volume_snapshot", "value": 16, "request_size": 1},
-    {"name": "volume_authority", "value": 17, "request_size": 7, "clients": ["usb"]},
-    {"name": "flush_comparison", "value": 18, "request_size": 2, "clients": ["usb"]},
-    {"name": "radio", "value": 19, "request_size": 1},
-    {"name": "routing_status", "value": 20, "request_size": 1},
-    {"name": "routing_handover", "value": 21, "request_size": 10},
-    {"name": "output_continuity", "value": 22, "reserved": true},
+    {"name": "write_setting", "value": 1, "request_size": 6},
+    {"name": "read_settings_snapshot", "value": 2, "request_size": [1, 2]},
+    {"name": "configure_audio_profile", "value": 3, "request_size": 7},
+    {"name": "set_game_mode", "value": 4, "request_size": 2},
+    {"name": "read_performance", "value": 5, "request_size": 1},
+    {"name": "start_nearby_finder", "value": 6, "request_size": 1},
+    {"name": "read_nearby_finder", "value": 7, "request_size": 1},
+    {"name": "stop_nearby_finder", "value": 8, "request_size": 1},
+    {"name": "read_audio_profile", "value": 9, "request_size": 1},
+    {"name": "settings_workflow_lease", "value": 10, "request_size": 6},
+    {"name": "read_audio_trace", "value": 11, "request_size": 1},
+    {"name": "set_diagnostic_ble_scan", "value": 12, "request_size": 2},
+    {"name": "read_aac_eld_inspection", "value": 13, "request_size": 1},
+    {"name": "enable_aac_eld_inspection", "value": 14, "request_size": 2},
+    {"name": "read_phone_input_counters", "value": 15, "request_size": 1},
+    {"name": "read_physical_volume", "value": 16, "request_size": 1},
+    {"name": "usb_host_volume_authority", "value": 17, "request_size": 7, "clients": ["usb"]},
+    {"name": "diagnostic_flush_comparison", "value": 18, "request_size": 2, "clients": ["usb"]},
+    {"name": "read_radio_and_bitrate", "value": 19, "request_size": 1},
+    {"name": "read_routing_status", "value": 20, "request_size": 1},
+    {"name": "request_routing_handover", "value": 21, "request_size": 10},
+    {"name": "reserved_output_continuity", "value": 22, "reserved": true},
     {"name": "reconnect_policy", "value": 23, "request_size": [1, 2]},
-    {"name": "firmware_version", "value": 24, "request_size": 1}
+    {"name": "read_firmware_version", "value": 24, "request_size": 1}
   ],
-  "settings_snapshot_selectors": [
-    {"name": "legacy", "request": [2]},
-    {"name": "extended", "request": [2, 1], "selector": 1}
-  ],
-  "lease_actions": [
-    {"name": "acquire", "value": 0},
-    {"name": "renew", "value": 1},
-    {"name": "release", "value": 2}
-  ],
-  "lease_response_version": 1,
-  "reconnect_policies": [
-    {"name": "manual", "value": 0},
-    {"name": "automatic", "value": 1}
-  ],
-  "firmware_variants": [
-    {"name": "standard", "value": 0},
-    {"name": "radio0076", "value": 1}
-  ],
+  "settings_snapshot_selectors": [{"name": "legacy", "request": [2]}, {"name": "extended", "request": [2, 1], "selector": 1}],
+  "reconnect_policies": [{"name": "manual", "value": 0}, {"name": "automatic", "value": 1}],
+  "firmware_variants": [{"name": "standard", "value": 0}, {"name": "radio0076", "value": 1}],
   "cached_slots": [
-    {"name": "model", "value": 1},
+    {"name": "model_metadata", "value": 1},
     {"name": "hearing_aid", "value": 2},
-    {"name": "assist_gate", "value": 3},
+    {"name": "hearing_assistance_gate", "value": 3},
     {"name": "pme", "value": 4},
     {"name": "ear_state", "value": 5},
     {"name": "settings_snapshot", "value": 6},
-    {"name": "eq", "value": 7}
+    {"name": "equalizer", "value": 7}
   ],
-  "cached_envelope_size": 8,
   "settings_snapshot": {
     "version": 1,
     "header_size": 2,
     "record_size": 13,
     "record": [
-      {"name": "id", "offset": 0, "size": 1},
-      {"name": "age_ms", "offset": 1, "size": 4},
+      {"name": "identifier", "offset": 0, "size": 1},
+      {"name": "age_milliseconds", "offset": 1, "size": 4},
       {"name": "revision", "offset": 5, "size": 4},
       {"name": "value", "offset": 9, "size": 4}
     ]
   },
   "settings_legacy_count": 23,
   "settings": [
-    {"index": 0, "id": 1, "name": "microphone", "cli": "microphone", "unknown_model": true, "explicit_choice": true,
+    {"index": 0, "id": 1, "name": "microphone", "cli": "microphone", "writable_with_unknown_model": true, "writable_without_report": true,
      "domain": {"kind": "enum", "values": [{"name": "auto", "value": 0}, {"name": "right", "value": 1}, {"name": "left", "value": 2}]}},
-    {"index": 1, "id": 10, "name": "ear_detection", "cli": "ear-detection", "unknown_model": true, "explicit_choice": true,
+    {"index": 1, "id": 10, "name": "ear_detection", "cli": "ear-detection", "writable_with_unknown_model": true, "writable_without_report": true,
      "domain": {"kind": "enum", "values": [{"name": "on", "value": 2}, {"name": "off", "value": 1}]}},
-    {"index": 2, "id": 13, "name": "listening_mode", "cli": "mode", "unknown_model": true, "explicit_choice": false,
+    {"index": 2, "id": 13, "name": "listening_mode", "cli": "mode", "writable_with_unknown_model": true, "writable_without_report": false,
      "domain": {"kind": "enum", "values": [{"name": "off", "value": 1}, {"name": "anc", "value": 2}, {"name": "transparency", "value": 3}, {"name": "adaptive", "value": 4}]}},
-    {"index": 3, "id": 22, "name": "hold_actions", "cli": "hold-actions", "unknown_model": true, "explicit_choice": true,
-     "domain": {"kind": "action_pair", "sides": ["left", "right"], "report_mask": 65535,
-                "values": [{"name": "noise-control", "value": 1}, {"name": "siri", "value": 5}]}},
-    {"index": 4, "id": 23, "name": "press_speed", "cli": "press-speed", "unknown_model": true, "explicit_choice": false,
+    {"index": 3, "id": 22, "name": "hold_actions", "cli": "hold-actions", "writable_with_unknown_model": true, "writable_without_report": true,
+     "domain": {"kind": "action_pair", "sides": ["left", "right"], "report_mask": 65535, "values": [{"name": "noise-control", "value": 1}, {"name": "siri", "value": 5}]}},
+    {"index": 4, "id": 23, "name": "press_speed", "cli": "press-speed", "writable_with_unknown_model": true, "writable_without_report": false,
      "domain": {"kind": "enum", "values": [{"name": "default", "value": 0}, {"name": "slower", "value": 1}, {"name": "slowest", "value": 2}]}},
-    {"index": 5, "id": 24, "name": "hold_duration", "cli": "hold-duration", "unknown_model": true, "explicit_choice": false,
+    {"index": 5, "id": 24, "name": "hold_duration", "cli": "hold-duration", "writable_with_unknown_model": true, "writable_without_report": false,
      "domain": {"kind": "enum", "values": [{"name": "default", "value": 0}, {"name": "slower", "value": 1}, {"name": "slowest", "value": 2}]}},
-    {"index": 6, "id": 26, "name": "hold_modes", "cli": "hold-modes", "unknown_model": true, "explicit_choice": true,
-     "domain": {"kind": "mode_mask", "min_bits": 2,
-                "values": [{"name": "off", "value": 1}, {"name": "anc", "value": 2}, {"name": "transparency", "value": 4}, {"name": "adaptive", "value": 8}]}},
-    {"index": 7, "id": 27, "name": "one_bud_anc", "cli": "one-bud-anc", "unknown_model": true, "explicit_choice": false,
+    {"index": 6, "id": 26, "name": "hold_modes", "cli": "hold-modes", "writable_with_unknown_model": true, "writable_without_report": true,
+     "domain": {"kind": "mode_mask", "values": [{"name": "off", "value": 1}, {"name": "anc", "value": 2}, {"name": "transparency", "value": 4}, {"name": "adaptive", "value": 8}], "minimum_selected": 2}},
+    {"index": 7, "id": 27, "name": "one_bud_anc", "cli": "one-bud-anc", "writable_with_unknown_model": true, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 8, "id": 28, "name": "crown_direction", "cli": "crown-direction", "unknown_model": false, "explicit_choice": false,
+    {"index": 8, "id": 28, "name": "crown_direction", "cli": "crown-direction", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "enum", "values": [{"name": "default", "value": 2}, {"name": "reversed", "value": 1}]}},
-    {"index": 9, "id": 31, "name": "tone_volume", "cli": "tone-volume", "unknown_model": true, "explicit_choice": false,
-     "domain": {"kind": "percent", "max": 100, "flag": 20480}},
-    {"index": 10, "id": 32, "name": "smart_routing", "cli": "smart-routing", "unknown_model": false, "explicit_choice": false,
+    {"index": 9, "id": 31, "name": "tone_volume", "cli": "tone-volume", "writable_with_unknown_model": true, "writable_without_report": false,
+     "domain": {"kind": "percent", "flag": 20480, "maximum": 100}},
+    {"index": 10, "id": 32, "name": "smart_routing", "cli": "smart-routing", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 11, "id": 35, "name": "swipe_duration", "cli": "swipe-duration", "unknown_model": true, "explicit_choice": true,
+    {"index": 11, "id": 35, "name": "swipe_duration", "cli": "swipe-duration", "writable_with_unknown_model": true, "writable_without_report": true,
      "domain": {"kind": "enum", "values": [{"name": "default", "value": 0}, {"name": "longer", "value": 1}, {"name": "longest", "value": 2}]}},
-    {"index": 12, "id": 36, "name": "call_controls", "cli": "call-controls", "unknown_model": true, "explicit_choice": false,
+    {"index": 12, "id": 36, "name": "call_controls", "cli": "call-controls", "writable_with_unknown_model": true, "writable_without_report": false,
      "domain": {"kind": "enum", "values": [{"name": "default", "value": 768}, {"name": "swapped", "value": 512}]}},
-    {"index": 13, "id": 37, "name": "volume_swipe", "cli": "volume-swipe", "unknown_model": false, "explicit_choice": false,
+    {"index": 13, "id": 37, "name": "volume_swipe", "cli": "volume-swipe", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 14, "id": 38, "name": "personalized_volume", "cli": "personalized-volume", "unknown_model": false, "explicit_choice": false,
+    {"index": 14, "id": 38, "name": "personalized_volume", "cli": "personalized-volume", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 15, "id": 40, "name": "conversation_awareness", "cli": "conversation-awareness", "unknown_model": false, "explicit_choice": false,
+    {"index": 15, "id": 40, "name": "conversation_awareness", "cli": "conversation-awareness", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 16, "id": 46, "name": "adaptive_strength", "cli": "adaptive-strength", "unknown_model": false, "explicit_choice": false,
-     "domain": {"kind": "percent", "max": 100}},
-    {"index": 17, "id": 49, "name": "case_sounds", "cli": "case-sounds", "unknown_model": true, "explicit_choice": true,
+    {"index": 16, "id": 46, "name": "adaptive_strength", "cli": "adaptive-strength", "writable_with_unknown_model": false, "writable_without_report": false,
+     "domain": {"kind": "percent", "maximum": 100}},
+    {"index": 17, "id": 49, "name": "case_sounds", "cli": "case-sounds", "writable_with_unknown_model": true, "writable_without_report": true,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 18, "id": 52, "name": "allow_off", "cli": "allow-off", "unknown_model": false, "explicit_choice": false,
+    {"index": 18, "id": 52, "name": "allow_off", "cli": "allow-off", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 19, "id": 53, "name": "pause_when_asleep", "cli": "pause-when-asleep", "unknown_model": false, "explicit_choice": false,
+    {"index": 19, "id": 53, "name": "pause_when_asleep", "cli": "pause-when-asleep", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 20, "id": 54, "name": "allow_auto_connect", "cli": "allow-auto-connect", "unknown_model": false, "explicit_choice": false,
+    {"index": 20, "id": 54, "name": "allow_auto_connect", "cli": "allow-auto-connect", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 21, "id": 59, "name": "optimized_charging", "cli": "optimized-charging", "unknown_model": true, "explicit_choice": false,
+    {"index": 21, "id": 59, "name": "optimized_charging", "cli": "optimized-charging", "writable_with_unknown_model": true, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 22, "id": 64, "name": "case_volume", "cli": "case-volume", "unknown_model": true, "explicit_choice": true,
-     "domain": {"kind": "percent", "max": 100}},
-    {"index": 23, "id": 55, "name": "en352_protection", "cli": "en352-protection", "unknown_model": false, "explicit_choice": false,
+    {"index": 22, "id": 64, "name": "case_volume", "cli": "case-volume", "writable_with_unknown_model": true, "writable_without_report": true,
+     "domain": {"kind": "percent", "maximum": 100}},
+    {"index": 23, "id": 55, "name": "en352_protection", "cli": "en352-protection", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}},
-    {"index": 24, "id": 47, "name": "gain_swipe", "cli": "gain-swipe", "unknown_model": false, "explicit_choice": false,
+    {"index": 24, "id": 47, "name": "gain_swipe", "cli": "gain-swipe", "writable_with_unknown_model": false, "writable_without_report": false,
      "domain": {"kind": "toggle", "values": [{"name": "on", "value": 1}, {"name": "off", "value": 2}]}}
   ],
   "profile_flags": ["listening", "adaptive", "allow_off_option", "silent_allow_off"],
@@ -319,22 +302,20 @@
     "header": [4, 0, 4, 0],
     "opcodes": [
       {"name": "capabilities", "value": 2},
-      {"name": "battery", "value": 4},
+      {"name": "battery_report", "value": 4},
       {"name": "ear_state", "value": 6},
-      {"name": "control", "value": 9},
-      {"name": "metadata", "value": 29},
-      {"name": "keys", "value": 49},
+      {"name": "control_command", "value": 9},
+      {"name": "device_metadata", "value": 29},
+      {"name": "key_report", "value": 49},
       {"name": "pme", "value": 83},
-      {"name": "eq", "value": 99}
+      {"name": "equalizer", "value": 99}
     ],
     "opcode_offset": 4,
-    "control_packet_size": 11,
-    "control_id_offset": 6,
     "control_value_offset": 7,
     "controls": [
       {"name": "receive_buffer", "value": 11, "comment": "Game Mode receive buffer, milliseconds 60 or 150"},
       {"name": "hearing_aid", "value": 44},
-      {"name": "assist_gate", "value": 51}
+      {"name": "hearing_assistance_gate", "value": 51}
     ],
     "battery": {
       "count_offset": 6,
@@ -342,14 +323,10 @@
       "entry_size": 5,
       "entry": [
         {"name": "component", "offset": 0, "size": 1},
-        {"name": "level", "offset": 2, "size": 1},
-        {"name": "status", "offset": 3, "size": 1}
+        {"name": "level_percent", "offset": 2, "size": 1},
+        {"name": "charge_status", "offset": 3, "size": 1}
       ],
-      "components": [
-        {"name": "left", "value": 4},
-        {"name": "right", "value": 2},
-        {"name": "case", "value": 8}
-      ],
+      "components": [{"name": "left", "value": 4}, {"name": "right", "value": 2}, {"name": "case", "value": 8}],
       "level_unknown": 255,
       "statuses": [
         {"name": "charging", "value": 1, "charging": true},
@@ -357,14 +334,40 @@
         {"name": "disconnected", "value": 4, "charging": false},
         {"name": "optimized_charging", "value": 5, "charging": true}
       ]
-    }
+    },
+    "control_command_size": 11,
+    "control_identifier_offset": 6
   },
   "cli": {
     "settings_order": [
-      "mode", "microphone", "ear-detection", "one-bud-anc", "conversation-awareness", "personalized-volume",
-      "en352-protection", "gain-swipe", "smart-routing", "allow-auto-connect", "allow-off", "pause-when-asleep",
-      "case-sounds", "optimized-charging", "volume-swipe", "press-speed", "hold-duration", "swipe-duration",
-      "call-controls", "crown-direction", "tone-volume", "case-volume", "adaptive-strength", "hold-modes", "hold-actions"
+      "mode",
+      "microphone",
+      "ear-detection",
+      "one-bud-anc",
+      "conversation-awareness",
+      "personalized-volume",
+      "en352-protection",
+      "gain-swipe",
+      "smart-routing",
+      "allow-auto-connect",
+      "allow-off",
+      "pause-when-asleep",
+      "case-sounds",
+      "optimized-charging",
+      "volume-swipe",
+      "press-speed",
+      "hold-duration",
+      "swipe-duration",
+      "call-controls",
+      "crown-direction",
+      "tone-volume",
+      "case-volume",
+      "adaptive-strength",
+      "hold-modes",
+      "hold-actions"
     ]
-  }
+  },
+  "settings_lease_response_version": 1,
+  "settings_lease_actions": [{"name": "acquire", "value": 0}, {"name": "renew", "value": 1}, {"name": "release", "value": 2}],
+  "cached_report_envelope_size": 8
 }

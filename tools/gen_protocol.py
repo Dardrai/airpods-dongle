@@ -86,13 +86,13 @@ def c_value_test(domain, var="value"):
         return " || ".join(f"{var}==0x{v['value']:x}u" for v in domain["values"])
     if kind == "percent":
         if "flag" in domain:
-            return f"({var}&~0xffu)==0x{domain['flag']:x}u && ({var}&0xffu)<={domain['max']}u"
-        return f"{var}<={domain['max']}u"
+            return f"({var}&~0xffu)==0x{domain['flag']:x}u && ({var}&0xffu)<={domain['maximum']}u"
+        return f"{var}<={domain['maximum']}u"
     if kind == "mode_mask":
         mask = 0
         for v in domain["values"]:
             mask |= v["value"]
-        return f"({var}&~0x{mask:x}u)==0 && dongle_bit_count({var})>={domain['min_bits']}u"
+        return f"({var}&~0x{mask:x}u)==0 && dongle_bit_count({var})>={domain['minimum_selected']}u"
     if kind == "action_pair":
         def side(expr):
             return "(" + " || ".join(f"{expr}==0x{v['value']:x}u" for v in domain["values"]) + ")"
@@ -111,9 +111,9 @@ def c_defines(prefix, items, fmt="{}"):
 def c_fields(prefix, fields):
     lines = []
     for f in fields:
-        lines.append(f"#define {prefix}{ident(f['name'])}_OFFSET {f['offset']}")
+        lines.append(f"#define {prefix}OFFSET_{ident(f['name'])} {f['offset']}")
         if f["size"] != 1:
-            lines.append(f"#define {prefix}{ident(f['name'])}_SIZE {f['size']}")
+            lines.append(f"#define {prefix}SIZE_{ident(f['name'])} {f['size']}")
     return lines
 
 
@@ -136,20 +136,20 @@ def c_header(spec):
         "",
         "// Report 2: basic control command and status.",
         f"#define DONGLE_REPORT_ID {control['report_id']}",
-        *c_fields("DONGLE_CMD_", control["command"]["fields"]),
-        *c_defines("DONGLE_OP_", control["command"]["opcodes"]),
+        *c_fields("DONGLE_COMMAND_", control["command"]["fields"]),
+        *c_defines("DONGLE_COMMAND_", control["command"]["opcodes"]),
         *c_fields("DONGLE_STATUS_", control["status"]["fields"]),
-        *c_defines("DONGLE_FLAG_", control["status"]["flags"]),
-        *c_defines("DONGLE_CAP_", control["status"]["capabilities"], "0x{:x}u"),
+        *c_defines("DONGLE_STATUS_FLAG_", control["status"]["flags"]),
+        *c_defines("DONGLE_CAPABILITY_", control["status"]["capabilities"], "0x{:x}u"),
         f"#define DONGLE_BATTERY_UNKNOWN {control['status']['battery_unknown']}",
         f"#define DONGLE_AGE_UNKNOWN 0x{control['status']['age_unknown']:x}u",
         f"#define DONGLE_AGE_SATURATED 0x{control['status']['age_saturated']:x}u",
     ]
     for c in control["components"]:
-        out.append(f"#define DONGLE_COMPONENT_{ident(c['name'])} {c['slot']}")
-        out.append(f"#define DONGLE_COMPONENT_{ident(c['name'])}_BIT {c['bit']}")
-    out += c_defines("DONGLE_LISTENING_", control["listening_modes"])
-    out += c_defines("DONGLE_CODEC_", control["codecs"])
+        out.append(f"#define DONGLE_COMPONENT_SLOT_{ident(c['name'])} {c['slot']}")
+        out.append(f"#define DONGLE_COMPONENT_BIT_{ident(c['name'])} {c['bit']}")
+    out += c_defines("DONGLE_LISTENING_MODE_", control["listening_modes"])
+    out += c_defines("DONGLE_OUTPUT_CODEC_", control["codecs"])
     out.append("enum {")
     out += [f"    DONGLE_RESULT_{ident(r['name'])} = {r['value']},"
             + ("  // internal; never published in report 2" if r.get("internal") else "")
@@ -157,10 +157,10 @@ def c_header(spec):
     out += ["};", "",
             "// Report 3: fragmented settings RPC.",
             f"#define DONGLE_RPC_REPORT_ID {rpc['report_id']}",
-            f"#define DONGLE_RPC_CHUNK {rpc['chunk']}u",
-            f"#define DONGLE_RPC_PAYLOAD_LIMIT {rpc['payload_limit']}u",
+            f"#define DONGLE_RPC_MAXIMUM_FRAGMENT_LENGTH {rpc['maximum_fragment_length']}u",
+            f"#define DONGLE_RPC_MAXIMUM_PAYLOAD_LENGTH {rpc['maximum_payload_length']}u",
             *c_fields("DONGLE_RPC_", rpc["fields"]),
-            *c_defines("DONGLE_RPC_OP_", rpc["operations"]),
+            *c_defines("DONGLE_RPC_OPERATION_", rpc["operations"]),
             "enum {",
             *[f"    DONGLE_RPC_PHASE_{ident(p['name'])} = {p['value']}," for p in rpc["phases"]],
             "};",
@@ -170,45 +170,45 @@ def c_header(spec):
             "",
             "// Phone RFCOMM transport framing around reports 2 and 3.",
             f"#define DONGLE_PHONE_HEADER_SIZE {phone['header_size']}u",
-            f"#define DONGLE_PHONE_FRAME_MAX {phone['frame_max']}u",
+            f"#define DONGLE_PHONE_MAXIMUM_FRAME_SIZE {phone['maximum_frame_size']}u",
             *c_fields("DONGLE_PHONE_", phone["fields"]),
-            *c_defines("DONGLE_PHONE_OP_", phone["operations"]),
-            f"#define DONGLE_PHONE_RESPONSE_FLAG 0x{phone['response_flag']:x}",
+            *c_defines("DONGLE_PHONE_OPERATION_", phone["operations"]),
+            f"#define DONGLE_PHONE_RESPONSE_OPERATION_FLAG 0x{phone['response_operation_flag']:x}",
             f"#define DONGLE_PHONE_ERROR_OPERATION 0x{phone['error_operation']:x}",
             *c_defines("DONGLE_PHONE_ERROR_", phone["errors"]),
             "",
             "// Typed feature requests (RPC operation 7) and their small payload enums.",
             *[f"#define DONGLE_FEATURE_{ident(f['name'])} {f['value']}"
               + ("  // reserved" if f.get("reserved") else "") for f in spec["features"]],
-            *c_defines("DONGLE_LEASE_", spec["lease_actions"]),
-            f"#define DONGLE_LEASE_RESPONSE_VERSION {spec['lease_response_version']}",
-            *c_defines("DONGLE_RECONNECT_", spec["reconnect_policies"]),
-            *c_defines("DONGLE_VARIANT_", spec["firmware_variants"], "{}u"),
-            *c_defines("DONGLE_CACHED_", spec["cached_slots"]),
-            f"#define DONGLE_CACHED_ENVELOPE_SIZE {spec['cached_envelope_size']}u",
+            *c_defines("DONGLE_SETTINGS_LEASE_", spec["settings_lease_actions"]),
+            f"#define DONGLE_SETTINGS_LEASE_RESPONSE_VERSION {spec['settings_lease_response_version']}",
+            *c_defines("DONGLE_RECONNECT_POLICY_", spec["reconnect_policies"]),
+            *c_defines("DONGLE_FIRMWARE_VARIANT_", spec["firmware_variants"], "{}u"),
+            *c_defines("DONGLE_CACHED_REPORT_", spec["cached_slots"]),
+            f"#define DONGLE_CACHED_REPORT_ENVELOPE_SIZE {spec['cached_report_envelope_size']}u",
             f"#define DONGLE_SETTINGS_SNAPSHOT_VERSION {spec['settings_snapshot']['version']}",
             f"#define DONGLE_SETTINGS_SNAPSHOT_HEADER_SIZE {spec['settings_snapshot']['header_size']}u",
             f"#define DONGLE_SETTINGS_SNAPSHOT_RECORD_SIZE {spec['settings_snapshot']['record_size']}u",
             *c_fields("DONGLE_SETTINGS_RECORD_", spec["settings_snapshot"]["record"]),
-            f"#define DONGLE_SETTINGS_SNAPSHOT_EXTENDED {by_name(spec['settings_snapshot_selectors'])['extended']['selector']}",
+            f"#define DONGLE_SETTINGS_SNAPSHOT_EXTENDED_SELECTOR {by_name(spec['settings_snapshot_selectors'])['extended']['selector']}",
             "",
             "// AirPods AACP framing used by the setting, readback and cache paths.",
             f"#define AACP_HEADER {c_string(aacp['header'])}",
             f"#define AACP_HEADER_SIZE {len(aacp['header'])}u",
             "#define AACP_HEADER_BYTES " + ",".join(f"0x{b:02x}" for b in aacp["header"]),
-            f"#define AACP_OPCODE_OFFSET {aacp['opcode_offset']}",
-            *c_defines("AACP_OP_", aacp["opcodes"], "0x{:02x}"),
-            f"#define AACP_CONTROL_HEADER {c_string(aacp['header'] + [by_name(aacp['opcodes'])['control']['value'], 0])}",
-            f"#define AACP_CONTROL_HEADER_SIZE {len(aacp['header']) + 2}u",
-            f"#define AACP_CONTROL_PACKET_SIZE {aacp['control_packet_size']}u",
-            f"#define AACP_CONTROL_ID_OFFSET {aacp['control_id_offset']}",
-            f"#define AACP_CONTROL_VALUE_OFFSET {aacp['control_value_offset']}",
+            f"#define AACP_OFFSET_OPCODE {aacp['opcode_offset']}",
+            *c_defines("AACP_OPCODE_", aacp["opcodes"], "0x{:02x}"),
+            f"#define AACP_CONTROL_COMMAND_HEADER {c_string(aacp['header'] + [by_name(aacp['opcodes'])['control_command']['value'], 0])}",
+            f"#define AACP_CONTROL_COMMAND_HEADER_SIZE {len(aacp['header']) + 2}u",
+            f"#define AACP_CONTROL_COMMAND_SIZE {aacp['control_command_size']}u",
+            f"#define AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER {aacp['control_identifier_offset']}",
+            f"#define AACP_CONTROL_COMMAND_OFFSET_VALUE {aacp['control_value_offset']}",
             *c_defines("AACP_CONTROL_", aacp["controls"], "0x{:02x}"),
-            f"#define AACP_BATTERY_COUNT_OFFSET {aacp['battery']['count_offset']}",
-            f"#define AACP_BATTERY_ENTRIES_OFFSET {aacp['battery']['entries_offset']}",
+            f"#define AACP_BATTERY_OFFSET_COUNT {aacp['battery']['count_offset']}",
+            f"#define AACP_BATTERY_OFFSET_ENTRIES {aacp['battery']['entries_offset']}",
             f"#define AACP_BATTERY_ENTRY_SIZE {aacp['battery']['entry_size']}u",
-            *c_fields("AACP_BATTERY_", aacp["battery"]["entry"]),
-            *c_defines("AACP_BATTERY_", aacp["battery"]["components"]),
+            *c_fields("AACP_BATTERY_ENTRY_", aacp["battery"]["entry"]),
+            *c_defines("AACP_BATTERY_COMPONENT_", aacp["battery"]["components"]),
             f"#define AACP_BATTERY_LEVEL_UNKNOWN {aacp['battery']['level_unknown']}",
             *c_defines("AACP_BATTERY_STATUS_", aacp["battery"]["statuses"]),
             "",
@@ -221,11 +221,11 @@ def c_header(spec):
         for v in d.get("values", []):
             out.append(f"#define {name}_{ident(v['name'])} 0x{v['value']:x}u")
         if d["kind"] == "percent":
-            out.append(f"#define {name}_MAX {d['max']}u")
+            out.append(f"#define {name}_MAXIMUM {d['maximum']}u")
             if "flag" in d:
                 out.append(f"#define {name}_FLAG 0x{d['flag']:x}u")
         if d["kind"] == "mode_mask":
-            out.append(f"#define {name}_MIN_BITS {d['min_bits']}u")
+            out.append(f"#define {name}_MINIMUM_SELECTED {d['minimum_selected']}u")
         if "report_mask" in d:
             out.append(f"#define {name}_REPORT_MASK 0x{d['report_mask']:x}u")
     out += [f"#define DONGLE_LEGACY_SETTING_COUNT {spec['settings_legacy_count']}u", "",
@@ -240,8 +240,8 @@ def c_header(spec):
     for s in spec["settings"]:
         out.append(f"        case DONGLE_SETTING_{ident(s['name'])}: return {c_value_test(s['domain'])};")
     out += ["        default: return false;", "    }", "}"]
-    for flag, comment in (("explicit_choice", "Writable for a known model before any device report."),
-                          ("unknown_model", "Writable while the model is unknown.")):
+    for flag, comment in (("writable_without_report", "Writable for a known model before any device report."),
+                          ("writable_with_unknown_model", "Writable while the model is unknown.")):
         out += [f"// {comment}",
                 f"static inline bool dongle_setting_{flag}(uint8_t id) {{",
                 "    switch(id) {"]
@@ -326,14 +326,14 @@ def py_module(spec):
         f"CAPABILITIES = {py_map(control['status']['capabilities'])}",
         f"COMPONENTS = {py_map(control['components'], 'bit')}",
         f"LISTENING_MODES = {py_map(control['listening_modes'])}",
-        f"CODECS = {py_map(control['codecs'])}",
+        f"OUTPUT_CODECS = {py_map(control['codecs'])}",
         f"RESULTS = {py_map(control['results'])}",
         f"BATTERY_UNKNOWN = {control['status']['battery_unknown']}",
         f"AGE_UNKNOWN = 0x{control['status']['age_unknown']:x}",
         "",
         f"RPC_REPORT_ID = {rpc['report_id']}",
-        f"RPC_CHUNK = {rpc['chunk']}",
-        f"RPC_PAYLOAD_LIMIT = {rpc['payload_limit']}",
+        f"RPC_MAXIMUM_FRAGMENT_LENGTH = {rpc['maximum_fragment_length']}",
+        f"RPC_MAXIMUM_PAYLOAD_LENGTH = {rpc['maximum_payload_length']}",
         f"RPC_FIELDS = {fields(rpc['fields'])}",
         f"RPC_OPERATIONS = {py_map(rpc['operations'])}",
         f"RPC_PHASES = {py_map(rpc['phases'])}",
@@ -341,18 +341,18 @@ def py_module(spec):
         "",
         f"PHONE_HEADER_SIZE = {phone['header_size']}",
         f"PHONE_OPERATIONS = {py_map(phone['operations'])}",
-        f"PHONE_RESPONSE_FLAG = 0x{phone['response_flag']:x}",
+        f"PHONE_RESPONSE_OPERATION_FLAG = 0x{phone['response_operation_flag']:x}",
         f"PHONE_ERROR_OPERATION = 0x{phone['error_operation']:x}",
         f"PHONE_ERRORS = {py_map(phone['errors'])}",
         "",
         f"FEATURES = {py_map(spec['features'])}",
-        f"LEASE_ACTIONS = {py_map(spec['lease_actions'])}",
+        f"SETTINGS_LEASE_ACTIONS = {py_map(spec['settings_lease_actions'])}",
         f"RECONNECT_POLICIES = {py_map(spec['reconnect_policies'])}",
         f"FIRMWARE_VARIANTS = {py_map(spec['firmware_variants'])}",
-        f"CACHED_SLOTS = {py_map(spec['cached_slots'])}",
+        f"CACHED_REPORTS = {py_map(spec['cached_slots'])}",
         f"SNAPSHOT_VERSION = {spec['settings_snapshot']['version']}",
         f"SNAPSHOT_RECORD_SIZE = {spec['settings_snapshot']['record_size']}",
-        f"SNAPSHOT_EXTENDED = {by_name(spec['settings_snapshot_selectors'])['extended']['selector']}",
+        f"SNAPSHOT_EXTENDED_SELECTOR = {by_name(spec['settings_snapshot_selectors'])['extended']['selector']}",
         "",
         f"AACP_HEADER = {bytes(aacp['header'])!r}",
         f"AACP_OPCODES = {py_map(aacp['opcodes'])}",
@@ -363,10 +363,10 @@ def py_module(spec):
         "EXTENDED_SETTINGS = frozenset({" + ", ".join(
             f"0x{s['id']:02x}" for s in spec["settings"] if s["index"] >= spec["settings_legacy_count"]) + "})",
         "SETTING_DOMAINS = {" + ", ".join(f"0x{s['id']:02x}: {s['domain']!r}" for s in spec["settings"]) + "}",
-        "EXPLICIT_CHOICE = frozenset({" + ", ".join(
-            f"0x{s['id']:02x}" for s in spec["settings"] if s["explicit_choice"]) + "})",
-        "UNKNOWN_MODEL = frozenset({" + ", ".join(
-            f"0x{s['id']:02x}" for s in spec["settings"] if s["unknown_model"]) + "})",
+        "WRITABLE_WITHOUT_REPORT = frozenset({" + ", ".join(
+            f"0x{s['id']:02x}" for s in spec["settings"] if s["writable_without_report"]) + "})",
+        "WRITABLE_WITH_UNKNOWN_MODEL = frozenset({" + ", ".join(
+            f"0x{s['id']:02x}" for s in spec["settings"] if s["writable_with_unknown_model"]) + "})",
         "PROFILES = (",
         *[f"    {{'models': {tuple(p['models'])!r}, 'controls': 0x{profile_mask(spec, p):08x}, "
           + ", ".join(f"{f!r}: {p[f]!r}" for f in spec["profile_flags"]) + "}," for p in spec["profiles"]],
@@ -379,7 +379,7 @@ def py_module(spec):
         f"TOGGLE = {py_map(settings['one_bud_anc']['domain']['values'])}",
         f"HOLD_ACTIONS = {py_map(settings['hold_actions']['domain']['values'])}",
         f"HOLD_MODE_BITS = {py_map(settings['hold_modes']['domain']['values'])}",
-        f"HOLD_MODE_MIN_BITS = {settings['hold_modes']['domain']['min_bits']}",
+        f"HOLD_MODE_MINIMUM_SELECTED = {settings['hold_modes']['domain']['minimum_selected']}",
         "PERCENT_FLAGS = {" + ", ".join(f"0x{s['id']:02x}: 0x{s['domain']['flag']:x}" for s in spec["settings"]
                                          if s["domain"]["kind"] == "percent" and "flag" in s["domain"]) + "}",
         "",
@@ -395,10 +395,10 @@ def py_module(spec):
         "    if kind == 'percent':",
         "        flag = domain.get('flag', 0)",
         "        low = value & 0xff if flag else value",
-        "        return value - low == flag and low <= domain['max']",
+        "        return value - low == flag and low <= domain['maximum']",
         "    if kind == 'mode_mask':",
         "        mask = sum(item['value'] for item in domain['values'])",
-        "        return not value & ~mask and bin(value).count('1') >= domain['min_bits']",
+        "        return not value & ~mask and bin(value).count('1') >= domain['minimum_selected']",
         "    if kind == 'action_pair':",
         "        allowed = {item['value'] for item in domain['values']}",
         "        sides = len(domain['sides'])",

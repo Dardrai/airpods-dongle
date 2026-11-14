@@ -26,7 +26,7 @@ static inline bool setting_value_valid(uint8_t id, uint32_t value) {
     return dongle_setting_value_valid(id, value);
 }
 static inline bool setting_explicit_choice(uint8_t id) {
-    return dongle_setting_explicit_choice(id);
+    return dongle_setting_writable_without_report(id);
 }
 static inline void settings_reset(dongle_settings_t *s) {
     memset(s,0,sizeof(*s)); s->allow_off_requested=-1;
@@ -68,7 +68,7 @@ static inline void settings_metadata(dongle_settings_t *s, const uint8_t *p, uns
     const setting_profile_t *previous=s->profile;
     int8_t requested=s->allow_off_requested;
     s->profile=NULL; s->firmware_major=0; s->allow_off_requested=-1;
-    if (n<11 || n>384 || p[AACP_OPCODE_OFFSET]!=AACP_OP_METADATA || p[5]) return;
+    if (n<11 || n>384 || p[AACP_OFFSET_OPCODE]!=AACP_OPCODE_DEVICE_METADATA || p[5]) return;
     const uint8_t *fields[11]; unsigned lengths[11], offset=11;
     for (unsigned i=0;i<11;++i) {
         if (offset>=n) return;
@@ -94,16 +94,16 @@ static inline void settings_metadata(dongle_settings_t *s, const uint8_t *p, uns
 }
 static inline void settings_packet(dongle_settings_t *s, const uint8_t *p, unsigned n, uint32_t now) {
     if (!p || n<6 || memcmp(p,AACP_HEADER,AACP_HEADER_SIZE) || p[5]) return;
-    if (p[AACP_OPCODE_OFFSET]==AACP_OP_METADATA) { settings_metadata(s,p,n); return; }
-    if (p[AACP_OPCODE_OFFSET]!=AACP_OP_CONTROL || n<7) return;
-    uint8_t id=p[AACP_CONTROL_ID_OFFSET];
+    if (p[AACP_OFFSET_OPCODE]==AACP_OPCODE_DEVICE_METADATA) { settings_metadata(s,p,n); return; }
+    if (p[AACP_OFFSET_OPCODE]!=AACP_OPCODE_CONTROL_COMMAND || n<7) return;
+    uint8_t id=p[AACP_CONTROL_COMMAND_OFFSET_IDENTIFIER];
     int index=setting_index(id);
     if (index<0) return;
     setting_report_t *r=&s->reports[index];
     if (++r->revision==0) ++r->revision;
     r->known=false;
-    if (n!=AACP_CONTROL_PACKET_SIZE) return;
-    uint32_t value=dongle_u32(p+AACP_CONTROL_VALUE_OFFSET);
+    if (n!=AACP_CONTROL_COMMAND_SIZE) return;
+    uint32_t value=dongle_u32(p+AACP_CONTROL_COMMAND_OFFSET_VALUE);
     // Upper bytes hold previous actions, not commands.
     if (id==DONGLE_SETTING_HOLD_ACTIONS) value&=DONGLE_SETTING_HOLD_ACTIONS_REPORT_MASK;
     if (!setting_value_valid(id,value)) return;
@@ -130,7 +130,7 @@ static inline bool settings_supported(const dongle_settings_t *s, uint8_t id, ui
     int index=setting_index(id);
     if (index<0 || !setting_value_valid(id,value)) return false;
     bool supported=s->profile ? (s->profile->controls&(UINT32_C(1)<<index))!=0 :
-        dongle_setting_unknown_model(id);
+        dongle_setting_writable_with_unknown_model(id);
     if (!supported) return false;
     bool adaptive=s->profile && s->profile->adaptive && s->firmware_major>=6;
     if (id==DONGLE_SETTING_HOLD_ACTIONS && s->profile && !s->profile->listening &&
@@ -158,10 +158,10 @@ static inline uint16_t settings_snapshot(const dongle_settings_t *s, uint32_t no
     for (unsigned i=0;i<limit;++i) {
         const setting_report_t *r=&s->reports[i];
         if (!r->known) continue;
-        out[offset+DONGLE_SETTINGS_RECORD_ID_OFFSET]=setting_ids[i];
-        dongle_put32(out+offset+DONGLE_SETTINGS_RECORD_AGE_MS_OFFSET,now-r->updated);
-        dongle_put32(out+offset+DONGLE_SETTINGS_RECORD_REVISION_OFFSET,r->revision);
-        dongle_put32(out+offset+DONGLE_SETTINGS_RECORD_VALUE_OFFSET,r->value);
+        out[offset+DONGLE_SETTINGS_RECORD_OFFSET_IDENTIFIER]=setting_ids[i];
+        dongle_put32(out+offset+DONGLE_SETTINGS_RECORD_OFFSET_AGE_MILLISECONDS,now-r->updated);
+        dongle_put32(out+offset+DONGLE_SETTINGS_RECORD_OFFSET_REVISION,r->revision);
+        dongle_put32(out+offset+DONGLE_SETTINGS_RECORD_OFFSET_VALUE,r->value);
         offset+=DONGLE_SETTINGS_SNAPSHOT_RECORD_SIZE;
     }
     return (uint16_t)offset;

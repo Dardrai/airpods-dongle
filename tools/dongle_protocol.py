@@ -8,29 +8,34 @@ HEADER_FIELDS = {'report_id': (0, 1), 'magic': (1, 4), 'version': (5, 1), 'lengt
 CONTROL_REPORT_ID = 2
 COMMAND_FIELDS = {
     'opcode': (7, 1),
-    'generation': (8, 4),
-    'address': (12, 6),
-    'sequence': (18, 4),
+    'connection_generation': (8, 4),
+    'selected_address': (12, 6),
+    'command_sequence': (18, 4),
     'argument': (22, 1),
     'reserved': (23, 41),
 }
-OPCODES = {'reconnect': 1, 'pair': 2, 'listening_mode': 3, 'phone_pairing': 4}
+OPCODES = {
+    'reconnect_airpods': 1,
+    'pair_airpods': 2,
+    'change_listening_mode': 3,
+    'open_phone_pairing': 4,
+}
 OPCODE_ARGUMENTS = {1: (0,), 2: (0,), 3: (2, 3), 4: (0,)}
 STATUS_FIELDS = {
     'flags': (7, 1),
-    'generation': (8, 4),
-    'address': (12, 6),
+    'connection_generation': (8, 4),
+    'selected_address': (12, 6),
     'listening_mode': (18, 1),
-    'battery': (19, 3),
-    'charging': (22, 1),
-    'codec': (23, 1),
-    'battery_ages': (24, 12),
-    'last_sequence': (36, 4),
-    'result': (40, 1),
-    'last_opcode': (41, 1),
+    'battery_percent': (19, 3),
+    'charging_components': (22, 1),
+    'output_codec': (23, 1),
+    'battery_ages_milliseconds': (24, 12),
+    'last_command_sequence': (36, 4),
+    'last_command_result': (40, 1),
+    'last_command_opcode': (41, 1),
     'capabilities': (42, 2),
-    'present': (44, 1),
-    'case_source': (45, 1),
+    'present_components': (44, 1),
+    'case_observed_components': (45, 1),
     'reserved': (46, 18),
 }
 STATUS_FLAGS = {
@@ -43,20 +48,20 @@ STATUS_FLAGS = {
     'usb_playback': 64,
 }
 CAPABILITIES = {
-    'pair_reconnect': 1,
-    'noise_control': 2,
+    'pair_and_reconnect': 1,
+    'confirmed_noise_control': 2,
     'phone_pairing': 4,
     'settings_transport': 8,
     'typed_features': 16,
-    'settings_lease': 32,
-    'battery_observation': 64,
-    'host_volume_authority': 128,
-    'runtime_update': 256,
-    'routing_handover': 512,
+    'settings_workflow_lease': 32,
+    'battery_observation_flags': 64,
+    'usb_host_volume_authority': 128,
+    'active_audio_runtime_update': 256,
+    'explicit_routing_handover': 512,
 }
 COMPONENTS = {'left': 1, 'right': 2, 'case': 4}
 LISTENING_MODES = {'unknown': 0, 'off': 1, 'anc': 2, 'transparency': 3, 'adaptive': 4}
-CODECS = {'unknown': 0, 'sbc': 1, 'aac': 2, 'aac_eld': 3}
+OUTPUT_CODECS = {'unknown': 0, 'sbc': 1, 'aac': 2, 'aac_eld': 3}
 RESULTS = {
     'none': 0,
     'accepted': 1,
@@ -71,26 +76,26 @@ BATTERY_UNKNOWN = 255
 AGE_UNKNOWN = 0xffffffff
 
 RPC_REPORT_ID = 3
-RPC_CHUNK = 42
-RPC_PAYLOAD_LIMIT = 512
+RPC_MAXIMUM_FRAGMENT_LENGTH = 42
+RPC_MAXIMUM_PAYLOAD_LENGTH = 512
 RPC_FIELDS = {
     'operation': (7, 1),
-    'generation': (8, 4),
-    'sequence': (12, 4),
-    'total': (16, 2),
-    'offset': (18, 2),
-    'length': (20, 1),
-    'phase': (21, 1),
+    'connection_generation': (8, 4),
+    'transaction_sequence': (12, 4),
+    'total_length': (16, 2),
+    'fragment_offset': (18, 2),
+    'fragment_length': (20, 1),
+    'response_phase': (21, 1),
     'payload': (22, 42),
 }
 RPC_OPERATIONS = {
-    'att': 1,
-    'aacp': 2,
-    'cached': 3,
-    'page': 4,
-    'cancel': 5,
-    'commit': 6,
-    'feature': 7,
+    'send_att_request': 1,
+    'send_aacp_packet': 2,
+    'read_cached_report': 3,
+    'select_response_page': 4,
+    'cancel_transaction': 5,
+    'commit_transaction': 6,
+    'typed_feature_request': 7,
 }
 RPC_PHASES = {'idle': 0, 'assembling': 1, 'running': 2, 'complete': 3, 'failed': 4}
 RPC_ERRORS = {
@@ -105,63 +110,63 @@ RPC_ERRORS = {
 }
 
 PHONE_HEADER_SIZE = 8
-PHONE_OPERATIONS = {'read': 1, 'write': 2}
-PHONE_RESPONSE_FLAG = 0x80
+PHONE_OPERATIONS = {'read_report': 1, 'write_report': 2}
+PHONE_RESPONSE_OPERATION_FLAG = 0x80
 PHONE_ERROR_OPERATION = 0xff
 PHONE_ERRORS = {'malformed': 1, 'busy': 2, 'unavailable': 3}
 
 FEATURES = {
-    'setting_write': 1,
-    'settings_snapshot': 2,
-    'audio_profile': 3,
-    'game_mode': 4,
-    'performance': 5,
-    'finder_start': 6,
-    'finder_status': 7,
-    'finder_stop': 8,
-    'audio_profile_status': 9,
-    'settings_lease': 10,
-    'audio_trace': 11,
-    'ble_scan_policy': 12,
-    'eld_inspect': 13,
-    'eld_inspect_enable': 14,
-    'phone_input': 15,
-    'volume_snapshot': 16,
-    'volume_authority': 17,
-    'flush_comparison': 18,
-    'radio': 19,
-    'routing_status': 20,
-    'routing_handover': 21,
-    'output_continuity': 22,
+    'write_setting': 1,
+    'read_settings_snapshot': 2,
+    'configure_audio_profile': 3,
+    'set_game_mode': 4,
+    'read_performance': 5,
+    'start_nearby_finder': 6,
+    'read_nearby_finder': 7,
+    'stop_nearby_finder': 8,
+    'read_audio_profile': 9,
+    'settings_workflow_lease': 10,
+    'read_audio_trace': 11,
+    'set_diagnostic_ble_scan': 12,
+    'read_aac_eld_inspection': 13,
+    'enable_aac_eld_inspection': 14,
+    'read_phone_input_counters': 15,
+    'read_physical_volume': 16,
+    'usb_host_volume_authority': 17,
+    'diagnostic_flush_comparison': 18,
+    'read_radio_and_bitrate': 19,
+    'read_routing_status': 20,
+    'request_routing_handover': 21,
+    'reserved_output_continuity': 22,
     'reconnect_policy': 23,
-    'firmware_version': 24,
+    'read_firmware_version': 24,
 }
-LEASE_ACTIONS = {'acquire': 0, 'renew': 1, 'release': 2}
+SETTINGS_LEASE_ACTIONS = {'acquire': 0, 'renew': 1, 'release': 2}
 RECONNECT_POLICIES = {'manual': 0, 'automatic': 1}
 FIRMWARE_VARIANTS = {'standard': 0, 'radio0076': 1}
-CACHED_SLOTS = {
-    'model': 1,
+CACHED_REPORTS = {
+    'model_metadata': 1,
     'hearing_aid': 2,
-    'assist_gate': 3,
+    'hearing_assistance_gate': 3,
     'pme': 4,
     'ear_state': 5,
     'settings_snapshot': 6,
-    'eq': 7,
+    'equalizer': 7,
 }
 SNAPSHOT_VERSION = 1
 SNAPSHOT_RECORD_SIZE = 13
-SNAPSHOT_EXTENDED = 1
+SNAPSHOT_EXTENDED_SELECTOR = 1
 
 AACP_HEADER = b'\x04\x00\x04\x00'
 AACP_OPCODES = {
     'capabilities': 2,
-    'battery': 4,
+    'battery_report': 4,
     'ear_state': 6,
-    'control': 9,
-    'metadata': 29,
-    'keys': 49,
+    'control_command': 9,
+    'device_metadata': 29,
+    'key_report': 49,
     'pme': 83,
-    'eq': 99,
+    'equalizer': 99,
 }
 
 # Setting (AACP control) IDs in catalog order; the index is the model-mask bit.
@@ -201,28 +206,28 @@ SETTING_DOMAINS = {
     0x16: {'kind': 'action_pair', 'sides': ['left', 'right'], 'report_mask': 65535, 'values': [{'name': 'noise-control', 'value': 1}, {'name': 'siri', 'value': 5}]},
     0x17: {'kind': 'enum', 'values': [{'name': 'default', 'value': 0}, {'name': 'slower', 'value': 1}, {'name': 'slowest', 'value': 2}]},
     0x18: {'kind': 'enum', 'values': [{'name': 'default', 'value': 0}, {'name': 'slower', 'value': 1}, {'name': 'slowest', 'value': 2}]},
-    0x1a: {'kind': 'mode_mask', 'min_bits': 2, 'values': [{'name': 'off', 'value': 1}, {'name': 'anc', 'value': 2}, {'name': 'transparency', 'value': 4}, {'name': 'adaptive', 'value': 8}]},
+    0x1a: {'kind': 'mode_mask', 'values': [{'name': 'off', 'value': 1}, {'name': 'anc', 'value': 2}, {'name': 'transparency', 'value': 4}, {'name': 'adaptive', 'value': 8}], 'minimum_selected': 2},
     0x1b: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
     0x1c: {'kind': 'enum', 'values': [{'name': 'default', 'value': 2}, {'name': 'reversed', 'value': 1}]},
-    0x1f: {'kind': 'percent', 'max': 100, 'flag': 20480},
+    0x1f: {'kind': 'percent', 'flag': 20480, 'maximum': 100},
     0x20: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
     0x23: {'kind': 'enum', 'values': [{'name': 'default', 'value': 0}, {'name': 'longer', 'value': 1}, {'name': 'longest', 'value': 2}]},
     0x24: {'kind': 'enum', 'values': [{'name': 'default', 'value': 768}, {'name': 'swapped', 'value': 512}]},
     0x25: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
     0x26: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
     0x28: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
-    0x2e: {'kind': 'percent', 'max': 100},
+    0x2e: {'kind': 'percent', 'maximum': 100},
     0x31: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
     0x34: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
     0x35: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
     0x36: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
     0x3b: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
-    0x40: {'kind': 'percent', 'max': 100},
+    0x40: {'kind': 'percent', 'maximum': 100},
     0x37: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
     0x2f: {'kind': 'toggle', 'values': [{'name': 'on', 'value': 1}, {'name': 'off', 'value': 2}]},
 }
-EXPLICIT_CHOICE = frozenset({0x01, 0x0a, 0x16, 0x1a, 0x23, 0x31, 0x40})
-UNKNOWN_MODEL = frozenset({0x01, 0x0a, 0x0d, 0x16, 0x17, 0x18, 0x1a, 0x1b, 0x1f, 0x23, 0x24, 0x31, 0x3b, 0x40})
+WRITABLE_WITHOUT_REPORT = frozenset({0x01, 0x0a, 0x16, 0x1a, 0x23, 0x31, 0x40})
+WRITABLE_WITH_UNKNOWN_MODEL = frozenset({0x01, 0x0a, 0x0d, 0x16, 0x17, 0x18, 0x1a, 0x1b, 0x1f, 0x23, 0x24, 0x31, 0x3b, 0x40})
 PROFILES = (
     {'models': (1523, 1722), 'controls': 0x00000203, 'listening': False, 'adaptive': False, 'allow_off_option': False, 'silent_allow_off': False},
     {'models': (2032, 2031), 'controls': 0x00000603, 'listening': False, 'adaptive': False, 'allow_off_option': False, 'silent_allow_off': False},
@@ -271,7 +276,7 @@ SETTINGS = {
 TOGGLE = {'on': 1, 'off': 2}
 HOLD_ACTIONS = {'noise-control': 1, 'siri': 5}
 HOLD_MODE_BITS = {'off': 1, 'anc': 2, 'transparency': 4, 'adaptive': 8}
-HOLD_MODE_MIN_BITS = 2
+HOLD_MODE_MINIMUM_SELECTED = 2
 PERCENT_FLAGS = {0x1f: 0x5000}
 
 
@@ -286,10 +291,10 @@ def setting_value_valid(control, value):
     if kind == 'percent':
         flag = domain.get('flag', 0)
         low = value & 0xff if flag else value
-        return value - low == flag and low <= domain['max']
+        return value - low == flag and low <= domain['maximum']
     if kind == 'mode_mask':
         mask = sum(item['value'] for item in domain['values'])
-        return not value & ~mask and bin(value).count('1') >= domain['min_bits']
+        return not value & ~mask and bin(value).count('1') >= domain['minimum_selected']
     if kind == 'action_pair':
         allowed = {item['value'] for item in domain['values']}
         sides = len(domain['sides'])
