@@ -1980,6 +1980,422 @@ static void dump_sbc_configuration(avdtp_media_codec_configuration_sbc_t configu
 
 
 
+static void signaling_connection_established(uint8_t *packet, uint16_t size) {
+    uint8_t status;
+    uint16_t avdtp_cid;
+    bd_addr_t address;
+    if (size < 14) return;
+    avdtp_subevent_signaling_connection_established_get_bd_addr(packet, address);
+    // The raw AVDTP event is shared with the phone's independent sink role.
+    if (bt_hci_phone_peer_allowed(address)) return;
+    // print info
+    printf("Current Device found: %s \n",  bd_addr_to_str(address));
+    avdtp_cid = avdtp_subevent_signaling_connection_established_get_avdtp_cid(packet);
+    status = avdtp_subevent_signaling_connection_established_get_status(packet);
+    if (status != 0){
+        if (avdtp_cid != media_tracker.avdtp_cid) return;
+        a2dp_connect_pending = false;
+        printf("AVDTP source signaling connection failed: status %d\n", status);
+        return;
+    }
+    if (!playback_peer_accept((const uint8_t *)get_device_addr(), address,
+                              media_tracker.avdtp_cid, avdtp_cid,
+                              a2dp_accept_incoming,
+                              a2dp_is_connected_flag || a2dp_connect_pending)) {
+        a2dp_source_disconnect(avdtp_cid);
+        return;
+    }
+    a2dp_connect_pending = false;
+    playback_encoder_close();
+    aaceld_variable_allowed = false;
+    memcpy(cur_active_device, address, sizeof(bd_addr_t));
+    cur_codec=0; actual_bitrate=0; reported_delay=UINT16_MAX; delay_revision=0;
+    a2dp_codec_configuration_reset();
+    finish_scan_avdtp_codec=false;
+    media_tracker.avdtp_cid = avdtp_subevent_signaling_connection_established_get_avdtp_cid(packet);
+    printf("AVDTP source signaling connection established: avdtp_cid 0x%02x\n", avdtp_cid);
+
+    allow_switch_slot = false;
+    set_led_mode_on();
+    // seid selected per argv
+    status = avdtp_source_discover_stream_endpoints(media_tracker.avdtp_cid);
+    a2dp_is_connected_flag = true;
+
+    // Open the AACP channel (PSM 0x1001) to the same AirPods once
+    // A2DP signaling is up. Runs after a short settle delay.
+    aacp_connect(cur_active_device);
+}
+
+static void media_connection_established(uint8_t *packet, uint16_t size) {
+    uint8_t status;
+    uint16_t avdtp_cid;
+    bd_addr_t address;
+    if (size != 14 || !a2dp_is_connected_flag || !media_tracker.avdtp_cid) return;
+    if (avdtp_subevent_streaming_connection_established_get_avdtp_cid(packet) != media_tracker.avdtp_cid) return;
+    avdtp_subevent_streaming_connection_established_get_bd_addr(packet, address);
+    if (memcmp(address, cur_active_device, 6) ||
+        memcmp(address, (const uint8_t *)get_device_addr(), 6)) return;
+    status = avdtp_subevent_streaming_connection_established_get_status(packet);
+    if (status != 0){
+        printf("Streaming connection failed: status %d\n", status);
+        // The SDK keeps signaling open after a failed media channel; retire it for normal retry.
+        playback_encoder_failed(&media_tracker);
+        return;
+    }
+    avdtp_cid = avdtp_subevent_streaming_connection_established_get_avdtp_cid(packet);
+    media_tracker.local_seid = avdtp_subevent_streaming_connection_established_get_local_seid(packet);
+    media_tracker.remote_seid = avdtp_subevent_streaming_connection_established_get_remote_seid(packet);
+    a2dp_is_connected_flag = true;
+
+    printf("Streaming connection established, avdtp_cid 0x%02x\n", avdtp_cid);
+
+    if (sc.local_stream_endpoint != NULL) {
+        l2cap_set_flushable_local_cid(sc.local_stream_endpoint->l2cap_media_cid);
+    }
+    // Resolve AACP ownership before initial Start; two powered dongles
+    // may retain their transports, but only the active host sends audio.
+    if (aacp_audio_owned()) playback_idle_phase = PLAYBACK_SUSPENDED;
+    avrcp_reconnect_schedule(true);
+    avrcp_reconnect_poll(btstack_run_loop_get_time_ms());
+}
+
+static void delay_report_received(uint8_t *packet, uint16_t size) {
+    if (size!=8 || !media_tracker.local_seid ||
+        avdtp_subevent_signaling_delay_report_get_avdtp_cid(packet)!=media_tracker.avdtp_cid ||
+        avdtp_subevent_signaling_delay_report_get_local_seid(packet)!=media_tracker.local_seid) return;
+    playback_game_observe_send(&playback_game,btstack_run_loop_get_time_ms(),
+        aacp_receive_buffer_serial(),aacp_receive_buffer_last(),delay_revision);
+    reported_delay=avdtp_subevent_signaling_delay_report_get_delay_100us(packet);
+    if (++delay_revision==0) ++delay_revision;
+    printf("DELAY_REPORT received: %d.%0d ms, local seid %d\n", 
+        avdtp_subevent_signaling_delay_report_get_delay_100us(packet)/10, avdtp_subevent_signaling_delay_report_get_delay_100us(packet)%10,
+        avdtp_subevent_signaling_delay_report_get_local_seid(packet));
+}
+
+static void sbc_configuration_received(uint8_t *packet, uint16_t size) {
+    aaceld_variable_allowed = false;
+    if (size < 18) return;
+    if (playback_options.codec && playback_options.codec!=1) { playback_encoder_failed(&media_tracker); return; }
+    printf("Set configuration and init encoder\n");
+    avdtp_media_codec_configuration_sbc_t sbc_configuration;
+    sbc_configuration.reconfigure = avdtp_subevent_signaling_media_codec_sbc_configuration_get_reconfigure(packet);
+    sbc_configuration.num_channels = avdtp_subevent_signaling_media_codec_sbc_configuration_get_num_channels(packet);
+    sbc_configuration.sampling_frequency = avdtp_subevent_signaling_media_codec_sbc_configuration_get_sampling_frequency(packet);
+    sbc_configuration.block_length = avdtp_subevent_signaling_media_codec_sbc_configuration_get_block_length(packet);
+    sbc_configuration.subbands = avdtp_subevent_signaling_media_codec_sbc_configuration_get_subbands(packet);
+    sbc_configuration.min_bitpool_value = avdtp_subevent_signaling_media_codec_sbc_configuration_get_min_bitpool_value(packet);
+    sbc_configuration.max_bitpool_value = avdtp_subevent_signaling_media_codec_sbc_configuration_get_max_bitpool_value(packet);
+
+    avdtp_channel_mode_t channel_mode = (avdtp_channel_mode_t) avdtp_subevent_signaling_media_codec_sbc_configuration_get_channel_mode(packet);
+    avdtp_sbc_allocation_method_t allocation_method = (avdtp_sbc_allocation_method_t) avdtp_subevent_signaling_media_codec_sbc_configuration_get_allocation_method(packet);
+
+    // Map Bluetooth spec definition to SBC Encoder expected input
+    sbc_configuration.allocation_method = (btstack_sbc_allocation_method_t)(((uint8_t) allocation_method) - 1);
+    switch (channel_mode){
+        case AVDTP_CHANNEL_MODE_JOINT_STEREO:
+            sbc_configuration.channel_mode = SBC_CHANNEL_MODE_JOINT_STEREO;
+            sbc_configuration.num_channels = 2;
+            break;
+        case AVDTP_CHANNEL_MODE_STEREO:
+            sbc_configuration.channel_mode = SBC_CHANNEL_MODE_STEREO;
+            sbc_configuration.num_channels = 2;
+            break;
+        case AVDTP_CHANNEL_MODE_DUAL_CHANNEL:
+            sbc_configuration.channel_mode = SBC_CHANNEL_MODE_DUAL_CHANNEL;
+            sbc_configuration.num_channels = 2;
+            break;
+        case AVDTP_CHANNEL_MODE_MONO:
+            sbc_configuration.channel_mode = SBC_CHANNEL_MODE_MONO;
+            sbc_configuration.num_channels = 1;
+            break;
+        default:
+            sbc_configuration.num_channels = 0;
+            break;
+    }
+    if (!playback_format_supported(sbc_configuration.sampling_frequency, sbc_configuration.num_channels)) {
+        playback_encoder_failed(&media_tracker);
+        return;
+    }
+    a2dp_demo_timer_stop(&media_tracker);
+    playback_encoder_close();
+    dump_sbc_configuration(sbc_configuration);
+    current_sample_rate = 48000;
+    btstack_sbc_encoder_init(&sbc_encoder_state, SBC_MODE_STANDARD, 
+        sbc_configuration.block_length, sbc_configuration.subbands, 
+        sbc_configuration.allocation_method, sbc_configuration.sampling_frequency, 
+        sbc_configuration.max_bitpool_value,
+        sbc_configuration.channel_mode);
+
+    audio_timer_interval = 10;
+
+    audio_slot_queue_configure_with_count(btstack_sbc_encoder_num_audio_frames(), AUDIO_SLOT_COUNT_SBC);
+
+    acc_num_simples = btstack_sbc_encoder_num_audio_frames();
+    cur_codec = 1;
+    actual_bitrate=0; profile_pending=false;
+
+    avdtp_source_open_stream(media_tracker.avdtp_cid, media_tracker.local_seid, media_tracker.remote_seid);
+}
+
+static void aac_configuration_received(uint8_t *packet, uint16_t size) {
+    aaceld_variable_allowed = false;
+    if (size < 18) return;
+    if (!a2dp_codec_configuration_aac_offered()) return;
+    if (playback_options.codec && playback_options.codec!=2) { playback_encoder_failed(&media_tracker); return; }
+    uint32_t rate = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_sampling_frequency(packet);
+    uint8_t channels = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_num_channels(packet);
+    uint8_t object = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_object_type(packet);
+    uint32_t bitrate = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_bit_rate(packet);
+    uint8_t vbr = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_vbr(packet);
+    if (!playback_format_supported(rate, channels) ||
+        (object != AVDTP_AAC_MPEG2_LC && object != AVDTP_AAC_MPEG4_LC) ||
+        vbr || bitrate < 96000 || bitrate > (uint32_t)a2dp_codec_configuration_maximum_aac_bitrate() ||
+        (playback_options.bitrate && playback_options.bitrate!=bitrate)) {
+        playback_encoder_failed(&media_tracker);
+        return;
+    }
+    a2dp_demo_timer_stop(&media_tracker);
+    playback_encoder_close();
+    handleAAC = NULL;
+    bool ready = aacEncOpen(&handleAAC, 0x01, channels) == AACENC_OK;
+    const struct { AACENC_PARAM key; UINT value; } params[] = {
+        {AACENC_AOT, AOT_AAC_LC}, {AACENC_BITRATE, bitrate},
+        {AACENC_SAMPLERATE, rate}, {AACENC_CHANNELMODE, MODE_2},
+        {AACENC_BITRATEMODE, 0}, {AACENC_AFTERBURNER, 0},
+        {AACENC_TRANSMUX, TT_MP4_LATM_MCP1},
+        {AACENC_HEADER_PERIOD, 1}, {AACENC_AUDIOMUXVER, 1}
+    };
+    for (size_t i = 0; ready && i < sizeof(params) / sizeof(params[0]); ++i) {
+        ready = aacEncoder_SetParam(handleAAC, params[i].key, params[i].value) == AACENC_OK;
+    }
+    if (ready) ready = aacEncEncode(handleAAC, NULL, NULL, NULL, NULL) == AACENC_OK &&
+                       aacEncInfo(handleAAC, &aacinf) == AACENC_OK;
+    uint16_t frame_samples = ready ? playback_aac_frame_samples(rate, aacinf.inputChannels,
+                                                               aacinf.frameLength, false) : 0;
+    if (frame_samples == 0) {
+        playback_encoder_close();
+        handleAAC = NULL;
+        playback_encoder_failed(&media_tracker);
+        return;
+    }
+    acc_num_simples = frame_samples;
+    current_sample_rate = rate;
+    audio_timer_interval = aac_audio_timer_interval;
+    audio_slot_queue_configure_with_count(acc_num_simples, AUDIO_SLOT_COUNT_AAC);
+    cur_codec = 2;
+    actual_bitrate=bitrate; profile_pending=false;
+    avdtp_source_open_stream(media_tracker.avdtp_cid, media_tracker.local_seid, media_tracker.remote_seid);
+}
+
+static void vendor_codec_configuration_received(uint8_t *packet, uint16_t size) {
+    uint32_t vendor_id;
+    uint16_t codec_id;
+    if (size < 19) return;
+    printf("Received other configuration\n");
+    uint8_t *codec_info = (uint8_t *) a2dp_subevent_signaling_media_codec_other_configuration_get_media_codec_information(packet);
+    uint16_t config_len = a2dp_subevent_signaling_media_codec_other_configuration_get_media_codec_information_len(packet);
+    if (config_len < 6 || codec_info + config_len > packet + size) return;
+    vendor_id = get_vendor_id(codec_info);
+    codec_id = get_codec_id(codec_info);
+
+    // Apple AAC-ELD
+    if (vendor_id == A2DP_CODEC_VENDOR_ID_APPLE && codec_id == A2DP_APPLE_CODEC_AAC_ELD) {
+        aaceld_variable_allowed = false;
+        printf("A2DP Source: Received Apple AAC-ELD configuration!\n");
+        printf("  raw config bytes: ");
+        uint16_t config_info_len = a2dp_subevent_signaling_media_codec_other_configuration_get_media_codec_information_len(packet);
+        for (int k = 0; k < config_info_len; k++) {
+            printf("%02x ", codec_info[k]);
+        }
+        printf("\n");
+
+        if (!playback_options_eld_configuration(codec_info, config_info_len,playback_options) ||
+            !playback_eld_peer_configuration(
+                a2dp_subevent_signaling_media_codec_other_configuration_get_local_seid(packet),
+                a2dp_subevent_signaling_media_codec_other_configuration_get_remote_seid(packet),
+                codec_info, config_info_len)) {
+            printf("Unsupported AAC-ELD configuration\n");
+            aacp_disconnect();
+            a2dp_source_disconnect(media_tracker.avdtp_cid);
+            return;
+        }
+        a2dp_demo_timer_stop(&media_tracker);
+        playback_eld_bind_configuration(
+            a2dp_subevent_signaling_media_codec_other_configuration_get_local_seid(packet),
+            a2dp_subevent_signaling_media_codec_other_configuration_get_remote_seid(packet));
+        aaceld_variable_allowed = playback_eld_variable(codec_info);
+        aaceld_bitrate = playback_options_eld_rate(codec_info, config_info_len, playback_options);
+        playback_bitrate_reset(&playback_bitrate, aaceld_bitrate, playback_options.rate_mode != 0);
+        if (!aaceld_encoder_init()) {
+            printf("AAC-ELD encoder initialization failed\n");
+            aacp_disconnect();
+            a2dp_source_disconnect(media_tracker.avdtp_cid);
+            return;
+        }
+
+        current_sample_rate = 48000;
+        acc_num_simples = aacinf.frameLength;  // use actual frame size from encoder
+        audio_timer_interval = 10;
+
+        printf("AAC-ELD acc_num_simples=%d\n", acc_num_simples);
+
+        audio_slot_queue_configure_with_count(acc_num_simples, AUDIO_SLOT_COUNT_ELD);
+
+        aaceld_frame_sequence = 1;
+
+        cur_codec = 4;  // new codec ID for AAC-ELD
+        actual_bitrate=aaceld_bitrate; profile_pending=false;
+
+        avdtp_source_open_stream(media_tracker.avdtp_cid, media_tracker.local_seid, media_tracker.remote_seid);
+    }
+    else
+    {
+        printf("Config not handled: vendor=0x%08lx codec=0x%04x\n", (unsigned long)vendor_id, codec_id);
+    }
+}
+
+static void signaling_command_accepted(uint8_t *packet, uint16_t size) {
+    uint8_t signal_identifier;
+    if (size < 8) return;
+    if (avdtp_subevent_signaling_accept_get_avdtp_cid(packet) != media_tracker.avdtp_cid) return;
+    signal_identifier = avdtp_subevent_signaling_accept_get_signal_identifier(packet);
+    if (is_cmd_triggered_localy){
+        is_cmd_triggered_localy = 0;
+        printf("AVDTP Source command accepted\n");
+    }
+
+    switch (signal_identifier){
+        case AVDTP_SI_ACCEPT_START:
+            if (avdtp_subevent_signaling_accept_get_local_seid(packet) == media_tracker.local_seid)
+                avdtp_start_stream_accept(media_tracker.avdtp_cid, media_tracker.local_seid);
+            break;
+        case AVDTP_SI_OPEN:
+            break;
+        case AVDTP_SI_SET_CONFIGURATION:
+            break;
+        case  AVDTP_SI_START:
+            if (encoder_job.deferred_size) break;
+            if (avdtp_subevent_signaling_accept_get_local_seid(packet) != media_tracker.local_seid) break;
+            if (profile_pending || a2dp_connect_pending || !finish_scan_avdtp_codec) break;
+            if (!aacp_audio_owned()) {
+                a2dp_demo_timer_stop(&media_tracker);
+                playback_idle_phase = PLAYBACK_SUSPENDING;
+                playback_idle_transition_since = btstack_run_loop_get_time_ms();
+                if (avdtp_source_suspend(media_tracker.avdtp_cid, media_tracker.local_seid) != ERROR_CODE_SUCCESS)
+                    playback_encoder_failed(&media_tracker);
+                break;
+            }
+            printf("Stream started.\n");
+            if (finish_scan_avdtp_codec){
+                bool mic_repaired=mic_recovery_pending && mic_recovery_started &&
+                    mic_recovery_cid==media_tracker.avdtp_cid &&
+                    playback_idle_phase==PLAYBACK_STARTING;
+                is_streaming = a2dp_demo_timer_start(&media_tracker);
+                if (is_streaming) {
+                    set_led_mode_on();
+                    if (mic_repaired) {
+                        mic_recovery_pending=mic_recovery_started=false;
+                        if (++mic_recovery_revision==0) ++mic_recovery_revision;
+                    }
+                }
+            }
+            break;
+        case AVDTP_SI_SUSPEND: {
+            if (avdtp_subevent_signaling_accept_get_local_seid(packet) != media_tracker.local_seid) break;
+            bool idle = playback_idle_phase == PLAYBACK_SUSPENDING;
+            bool recover = suspend_recovery_pending;
+            bool reset = recovery_reset_encoder;
+            bool keep_phone = bridge_phone_recovering();
+            critical_section_enter_blocking(&playback_pcm_lock);
+            uint32_t usb_revision = usb_playback_revision;
+            critical_section_exit(&playback_pcm_lock);
+            a2dp_demo_timer_stop(&media_tracker);
+            if (idle) playback_idle_phase = PLAYBACK_SUSPENDED;
+            else if (recover) {
+                phone_output_recovery = keep_phone;
+                if (reset && !aaceld_encoder_init()) {
+                    phone_output_recovery = false;
+                    aacp_disconnect();
+                    a2dp_source_disconnect(media_tracker.avdtp_cid);
+                    break;
+                }
+                playback_idle_phase=PLAYBACK_STARTING;
+                playback_idle_transition_since=btstack_run_loop_get_time_ms();
+                if (avdtp_source_start_stream(media_tracker.avdtp_cid, media_tracker.local_seid) != ERROR_CODE_SUCCESS) {
+                    phone_output_recovery = false;
+                    aacp_disconnect();
+                    a2dp_source_disconnect(media_tracker.avdtp_cid);
+                }
+            }
+            else {
+                playback_peer_suspended = true;
+                playback_peer_suspend_revision = usb_revision;
+            }
+            break;
+        }
+        case AVDTP_SI_ABORT:
+        case AVDTP_SI_CLOSE:
+            printf("Stream released.\n");
+            a2dp_demo_timer_stop(&media_tracker);
+            break;
+        default:
+            break;
+    }
+}
+
+static void signaling_command_rejected(uint8_t *packet, uint16_t size) {
+    uint8_t signal_identifier;
+    if (size != 8 || !a2dp_is_connected_flag || !media_tracker.avdtp_cid ||
+        avdtp_subevent_signaling_reject_get_is_initiator(packet) != 1 ||
+        memcmp(cur_active_device, (const uint8_t *)get_device_addr(), 6)) return;
+    if (avdtp_subevent_signaling_reject_get_avdtp_cid(packet) != media_tracker.avdtp_cid) return;
+    signal_identifier = avdtp_subevent_signaling_reject_get_signal_identifier(packet);
+    bool connection_query = signal_identifier == AVDTP_SI_DISCOVER ||
+        signal_identifier == AVDTP_SI_GET_CAPABILITIES || signal_identifier == AVDTP_SI_GET_ALL_CAPABILITIES;
+    if (!connection_query &&
+        avdtp_subevent_signaling_reject_get_local_seid(packet) != media_tracker.local_seid) return;
+    if (connection_query || signal_identifier == AVDTP_SI_SET_CONFIGURATION ||
+        signal_identifier == AVDTP_SI_OPEN || signal_identifier == AVDTP_SI_SUSPEND ||
+        signal_identifier == AVDTP_SI_START)
+        playback_encoder_failed(&media_tracker);
+}
+
+static void media_connection_released(uint8_t *packet, uint16_t size) {
+    if (size != 6 || !a2dp_is_connected_flag || !media_tracker.avdtp_cid ||
+        avdtp_subevent_streaming_connection_released_get_local_seid(packet) != media_tracker.local_seid ||
+        memcmp(cur_active_device, (const uint8_t *)get_device_addr(), 6)) return;
+    if (avdtp_subevent_streaming_connection_released_get_avdtp_cid(packet) != media_tracker.avdtp_cid) return;
+    l2cap_set_flushable_local_cid(0);
+    // Media Close resets the SDK endpoint; a live signaling link alone cannot restart it.
+    playback_encoder_failed(&media_tracker);
+    printf("Streaming connection released.\n");
+}
+
+static void signaling_connection_released(uint8_t *packet, uint16_t size) {
+    UNUSED(size);
+    if (avdtp_subevent_signaling_connection_released_get_avdtp_cid(packet) != media_tracker.avdtp_cid) return;
+    aaceld_variable_allowed = false;
+    avrcp_reconnect_reset();
+    mic_prepare_open=mic_recovery_pending=mic_recovery_started=false;
+    a2dp_demo_timer_stop(&media_tracker);
+    aacp_media_disconnected();
+    l2cap_set_flushable_local_cid(0);
+    audio_slot_queue_init();
+    playback_encoder_close();
+    a2dp_connect_pending = false;
+    media_tracker.avdtp_cid = 0;
+    media_tracker.local_seid = 0;
+    media_tracker.remote_seid = 0;
+    allow_switch_slot = true;
+    finish_scan_avdtp_codec = false;
+    a2dp_is_connected_flag = false;
+    cur_codec=0; actual_bitrate=0; reported_delay=UINT16_MAX; delay_revision=0;
+    cur_capability = 0;
+    set_led_mode_off();
+    a2dp_codec_configuration_released();
+    printf("Signaling connection released.\n");
+}
+
 static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size){
     if (packet_type != HCI_EVENT_PACKET || size < 3 || packet[1] + 2u != size) return;
     if (hci_event_packet_get_type(packet) != HCI_EVENT_AVDTP_META) return;
@@ -1992,434 +2408,50 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
     UNUSED(channel);
     UNUSED(size);
 
-    uint8_t signal_identifier;
-    uint8_t status;
-    uint16_t avdtp_cid;
-    uint32_t vendor_id;
-    uint16_t codec_id;
-    bd_addr_t address;
-
-
     //printf("Current packet event is 0x%02x\n", packet[2]);
     if (a2dp_codec_configuration_discovery_event(packet, size)) return;
 
     switch (packet[2]){
         case AVDTP_SUBEVENT_SIGNALING_CONNECTION_ESTABLISHED:
-            if (size < 14) break;
-            avdtp_subevent_signaling_connection_established_get_bd_addr(packet, address);
-            // The raw AVDTP event is shared with the phone's independent sink role.
-            if (bt_hci_phone_peer_allowed(address)) return;
-            // print info
-            printf("Current Device found: %s \n",  bd_addr_to_str(address));
-            avdtp_cid = avdtp_subevent_signaling_connection_established_get_avdtp_cid(packet);
-            status = avdtp_subevent_signaling_connection_established_get_status(packet);
-            if (status != 0){
-                if (avdtp_cid != media_tracker.avdtp_cid) break;
-                a2dp_connect_pending = false;
-                printf("AVDTP source signaling connection failed: status %d\n", status);
-                break;
-            }
-            if (!playback_peer_accept((const uint8_t *)get_device_addr(), address,
-                                      media_tracker.avdtp_cid, avdtp_cid,
-                                      a2dp_accept_incoming,
-                                      a2dp_is_connected_flag || a2dp_connect_pending)) {
-                a2dp_source_disconnect(avdtp_cid);
-                break;
-            }
-            a2dp_connect_pending = false;
-            playback_encoder_close();
-            aaceld_variable_allowed = false;
-            memcpy(cur_active_device, address, sizeof(bd_addr_t));
-            cur_codec=0; actual_bitrate=0; reported_delay=UINT16_MAX; delay_revision=0;
-            a2dp_codec_configuration_reset();
-            finish_scan_avdtp_codec=false;
-            media_tracker.avdtp_cid = avdtp_subevent_signaling_connection_established_get_avdtp_cid(packet);
-            printf("AVDTP source signaling connection established: avdtp_cid 0x%02x\n", avdtp_cid);
-
-            allow_switch_slot = false;
-            set_led_mode_on();
-            // seid selected per argv
-            status = avdtp_source_discover_stream_endpoints(media_tracker.avdtp_cid);
-            a2dp_is_connected_flag = true;
-
-            // Open the AACP channel (PSM 0x1001) to the same AirPods once
-            // A2DP signaling is up. Runs after a short settle delay.
-            aacp_connect(cur_active_device);
-
+            signaling_connection_established(packet, size);
             break;
-        
         case AVDTP_SUBEVENT_STREAMING_CONNECTION_ESTABLISHED:
-            if (size != 14 || !a2dp_is_connected_flag || !media_tracker.avdtp_cid) break;
-            if (avdtp_subevent_streaming_connection_established_get_avdtp_cid(packet) != media_tracker.avdtp_cid) break;
-            avdtp_subevent_streaming_connection_established_get_bd_addr(packet, address);
-            if (memcmp(address, cur_active_device, 6) ||
-                memcmp(address, (const uint8_t *)get_device_addr(), 6)) break;
-            status = avdtp_subevent_streaming_connection_established_get_status(packet);
-            if (status != 0){
-                printf("Streaming connection failed: status %d\n", status);
-                // The SDK keeps signaling open after a failed media channel; retire it for normal retry.
-                playback_encoder_failed(&media_tracker);
-                break;
-            }
-            avdtp_cid = avdtp_subevent_streaming_connection_established_get_avdtp_cid(packet);
-            media_tracker.local_seid = avdtp_subevent_streaming_connection_established_get_local_seid(packet);
-            media_tracker.remote_seid = avdtp_subevent_streaming_connection_established_get_remote_seid(packet);
-            a2dp_is_connected_flag = true;
-
-            printf("Streaming connection established, avdtp_cid 0x%02x\n", avdtp_cid);
-
-            if (sc.local_stream_endpoint != NULL) {
-                l2cap_set_flushable_local_cid(sc.local_stream_endpoint->l2cap_media_cid);
-            }
-            // Resolve AACP ownership before initial Start; two powered dongles
-            // may retain their transports, but only the active host sends audio.
-            if (aacp_audio_owned()) playback_idle_phase = PLAYBACK_SUSPENDED;
-            avrcp_reconnect_schedule(true);
-            avrcp_reconnect_poll(btstack_run_loop_get_time_ms());
+            media_connection_established(packet, size);
             break;
-
         case AVDTP_SUBEVENT_SIGNALING_DELAY_REPORT:
-            if (size!=8 || !media_tracker.local_seid ||
-                avdtp_subevent_signaling_delay_report_get_avdtp_cid(packet)!=media_tracker.avdtp_cid ||
-                avdtp_subevent_signaling_delay_report_get_local_seid(packet)!=media_tracker.local_seid) break;
-            playback_game_observe_send(&playback_game,btstack_run_loop_get_time_ms(),
-                aacp_receive_buffer_serial(),aacp_receive_buffer_last(),delay_revision);
-            reported_delay=avdtp_subevent_signaling_delay_report_get_delay_100us(packet);
-            if (++delay_revision==0) ++delay_revision;
-            printf("DELAY_REPORT received: %d.%0d ms, local seid %d\n", 
-                avdtp_subevent_signaling_delay_report_get_delay_100us(packet)/10, avdtp_subevent_signaling_delay_report_get_delay_100us(packet)%10,
-                avdtp_subevent_signaling_delay_report_get_local_seid(packet));
+            delay_report_received(packet, size);
             break;
-        case AVDTP_SUBEVENT_SIGNALING_MEDIA_CODEC_SBC_CONFIGURATION:{
-            aaceld_variable_allowed = false;
-            if (size < 18) break;
-            if (playback_options.codec && playback_options.codec!=1) { playback_encoder_failed(&media_tracker); break; }
-            printf("Set configuration and init encoder\n");
-            avdtp_media_codec_configuration_sbc_t sbc_configuration;
-            sbc_configuration.reconfigure = avdtp_subevent_signaling_media_codec_sbc_configuration_get_reconfigure(packet);
-            sbc_configuration.num_channels = avdtp_subevent_signaling_media_codec_sbc_configuration_get_num_channels(packet);
-            sbc_configuration.sampling_frequency = avdtp_subevent_signaling_media_codec_sbc_configuration_get_sampling_frequency(packet);
-            sbc_configuration.block_length = avdtp_subevent_signaling_media_codec_sbc_configuration_get_block_length(packet);
-            sbc_configuration.subbands = avdtp_subevent_signaling_media_codec_sbc_configuration_get_subbands(packet);
-            sbc_configuration.min_bitpool_value = avdtp_subevent_signaling_media_codec_sbc_configuration_get_min_bitpool_value(packet);
-            sbc_configuration.max_bitpool_value = avdtp_subevent_signaling_media_codec_sbc_configuration_get_max_bitpool_value(packet);
-            
-            avdtp_channel_mode_t channel_mode = (avdtp_channel_mode_t) avdtp_subevent_signaling_media_codec_sbc_configuration_get_channel_mode(packet);
-            avdtp_sbc_allocation_method_t allocation_method = (avdtp_sbc_allocation_method_t) avdtp_subevent_signaling_media_codec_sbc_configuration_get_allocation_method(packet);
-            
-            // Map Bluetooth spec definition to SBC Encoder expected input
-            sbc_configuration.allocation_method = (btstack_sbc_allocation_method_t)(((uint8_t) allocation_method) - 1);
-            switch (channel_mode){
-                case AVDTP_CHANNEL_MODE_JOINT_STEREO:
-                    sbc_configuration.channel_mode = SBC_CHANNEL_MODE_JOINT_STEREO;
-                    sbc_configuration.num_channels = 2;
-                    break;
-                case AVDTP_CHANNEL_MODE_STEREO:
-                    sbc_configuration.channel_mode = SBC_CHANNEL_MODE_STEREO;
-                    sbc_configuration.num_channels = 2;
-                    break;
-                case AVDTP_CHANNEL_MODE_DUAL_CHANNEL:
-                    sbc_configuration.channel_mode = SBC_CHANNEL_MODE_DUAL_CHANNEL;
-                    sbc_configuration.num_channels = 2;
-                    break;
-                case AVDTP_CHANNEL_MODE_MONO:
-                    sbc_configuration.channel_mode = SBC_CHANNEL_MODE_MONO;
-                    sbc_configuration.num_channels = 1;
-                    break;
-                default:
-                    sbc_configuration.num_channels = 0;
-                    break;
-            }
-            if (!playback_format_supported(sbc_configuration.sampling_frequency, sbc_configuration.num_channels)) {
-                playback_encoder_failed(&media_tracker);
-                break;
-            }
-            a2dp_demo_timer_stop(&media_tracker);
-            playback_encoder_close();
-            dump_sbc_configuration(sbc_configuration);
-            current_sample_rate = 48000;
-            btstack_sbc_encoder_init(&sbc_encoder_state, SBC_MODE_STANDARD, 
-                sbc_configuration.block_length, sbc_configuration.subbands, 
-                sbc_configuration.allocation_method, sbc_configuration.sampling_frequency, 
-                sbc_configuration.max_bitpool_value,
-                sbc_configuration.channel_mode);
-
-            audio_timer_interval = 10;
-
-            audio_slot_queue_configure_with_count(btstack_sbc_encoder_num_audio_frames(), AUDIO_SLOT_COUNT_SBC);
-
-            acc_num_simples = btstack_sbc_encoder_num_audio_frames();
-            cur_codec = 1;
-            actual_bitrate=0; profile_pending=false;
-
-            avdtp_source_open_stream(media_tracker.avdtp_cid, media_tracker.local_seid, media_tracker.remote_seid);
+        case AVDTP_SUBEVENT_SIGNALING_MEDIA_CODEC_SBC_CONFIGURATION:
+            sbc_configuration_received(packet, size);
             break;
-        }
-
-        case AVDTP_SUBEVENT_SIGNALING_MEDIA_CODEC_MPEG_AAC_CONFIGURATION: {
-            aaceld_variable_allowed = false;
-            if (size < 18) break;
-            if (!a2dp_codec_configuration_aac_offered()) break;
-            if (playback_options.codec && playback_options.codec!=2) { playback_encoder_failed(&media_tracker); break; }
-            uint32_t rate = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_sampling_frequency(packet);
-            uint8_t channels = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_num_channels(packet);
-            uint8_t object = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_object_type(packet);
-            uint32_t bitrate = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_bit_rate(packet);
-            uint8_t vbr = a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_vbr(packet);
-            if (!playback_format_supported(rate, channels) ||
-                (object != AVDTP_AAC_MPEG2_LC && object != AVDTP_AAC_MPEG4_LC) ||
-                vbr || bitrate < 96000 || bitrate > (uint32_t)a2dp_codec_configuration_maximum_aac_bitrate() ||
-                (playback_options.bitrate && playback_options.bitrate!=bitrate)) {
-                playback_encoder_failed(&media_tracker);
-                break;
-            }
-            a2dp_demo_timer_stop(&media_tracker);
-            playback_encoder_close();
-            handleAAC = NULL;
-            bool ready = aacEncOpen(&handleAAC, 0x01, channels) == AACENC_OK;
-            const struct { AACENC_PARAM key; UINT value; } params[] = {
-                {AACENC_AOT, AOT_AAC_LC}, {AACENC_BITRATE, bitrate},
-                {AACENC_SAMPLERATE, rate}, {AACENC_CHANNELMODE, MODE_2},
-                {AACENC_BITRATEMODE, 0}, {AACENC_AFTERBURNER, 0},
-                {AACENC_TRANSMUX, TT_MP4_LATM_MCP1},
-                {AACENC_HEADER_PERIOD, 1}, {AACENC_AUDIOMUXVER, 1}
-            };
-            for (size_t i = 0; ready && i < sizeof(params) / sizeof(params[0]); ++i) {
-                ready = aacEncoder_SetParam(handleAAC, params[i].key, params[i].value) == AACENC_OK;
-            }
-            if (ready) ready = aacEncEncode(handleAAC, NULL, NULL, NULL, NULL) == AACENC_OK &&
-                               aacEncInfo(handleAAC, &aacinf) == AACENC_OK;
-            uint16_t frame_samples = ready ? playback_aac_frame_samples(rate, aacinf.inputChannels,
-                                                                       aacinf.frameLength, false) : 0;
-            if (frame_samples == 0) {
-                playback_encoder_close();
-                handleAAC = NULL;
-                playback_encoder_failed(&media_tracker);
-                break;
-            }
-            acc_num_simples = frame_samples;
-            current_sample_rate = rate;
-            audio_timer_interval = aac_audio_timer_interval;
-            audio_slot_queue_configure_with_count(acc_num_simples, AUDIO_SLOT_COUNT_AAC);
-            cur_codec = 2;
-            actual_bitrate=bitrate; profile_pending=false;
-            avdtp_source_open_stream(media_tracker.avdtp_cid, media_tracker.local_seid, media_tracker.remote_seid);
+        case AVDTP_SUBEVENT_SIGNALING_MEDIA_CODEC_MPEG_AAC_CONFIGURATION:
+            aac_configuration_received(packet, size);
             break;
-        }
-
         case AVDTP_SUBEVENT_SIGNALING_MEDIA_CODEC_MPEG_AUDIO_CONFIGURATION:
         case AVDTP_SUBEVENT_SIGNALING_MEDIA_CODEC_ATRAC_CONFIGURATION:
             // TODO: handle other configuration event
             printf("MPEG audio/ATRAC configuration not supported\n");
             break;
         case AVDTP_SUBEVENT_SIGNALING_MEDIA_CODEC_OTHER_CONFIGURATION:
-            if (size < 19) break;
-            printf("Received other configuration\n");
-            uint8_t *codec_info = (uint8_t *) a2dp_subevent_signaling_media_codec_other_configuration_get_media_codec_information(packet);
-            uint16_t config_len = a2dp_subevent_signaling_media_codec_other_configuration_get_media_codec_information_len(packet);
-            if (config_len < 6 || codec_info + config_len > packet + size) break;
-            vendor_id = get_vendor_id(codec_info);
-            codec_id = get_codec_id(codec_info);
-
-            // Apple AAC-ELD
-            if (vendor_id == A2DP_CODEC_VENDOR_ID_APPLE && codec_id == A2DP_APPLE_CODEC_AAC_ELD) {
-                aaceld_variable_allowed = false;
-                printf("A2DP Source: Received Apple AAC-ELD configuration!\n");
-                printf("  raw config bytes: ");
-                uint16_t config_info_len = a2dp_subevent_signaling_media_codec_other_configuration_get_media_codec_information_len(packet);
-                for (int k = 0; k < config_info_len; k++) {
-                    printf("%02x ", codec_info[k]);
-                }
-                printf("\n");
-
-                if (!playback_options_eld_configuration(codec_info, config_info_len,playback_options) ||
-                    !playback_eld_peer_configuration(
-                        a2dp_subevent_signaling_media_codec_other_configuration_get_local_seid(packet),
-                        a2dp_subevent_signaling_media_codec_other_configuration_get_remote_seid(packet),
-                        codec_info, config_info_len)) {
-                    printf("Unsupported AAC-ELD configuration\n");
-                    aacp_disconnect();
-                    a2dp_source_disconnect(media_tracker.avdtp_cid);
-                    break;
-                }
-                a2dp_demo_timer_stop(&media_tracker);
-                playback_eld_bind_configuration(
-                    a2dp_subevent_signaling_media_codec_other_configuration_get_local_seid(packet),
-                    a2dp_subevent_signaling_media_codec_other_configuration_get_remote_seid(packet));
-                aaceld_variable_allowed = playback_eld_variable(codec_info);
-                aaceld_bitrate = playback_options_eld_rate(codec_info, config_info_len, playback_options);
-                playback_bitrate_reset(&playback_bitrate, aaceld_bitrate, playback_options.rate_mode != 0);
-                if (!aaceld_encoder_init()) {
-                    printf("AAC-ELD encoder initialization failed\n");
-                    aacp_disconnect();
-                    a2dp_source_disconnect(media_tracker.avdtp_cid);
-                    break;
-                }
-
-                current_sample_rate = 48000;
-                acc_num_simples = aacinf.frameLength;  // use actual frame size from encoder
-                audio_timer_interval = 10;
-
-                printf("AAC-ELD acc_num_simples=%d\n", acc_num_simples);
-
-                audio_slot_queue_configure_with_count(acc_num_simples, AUDIO_SLOT_COUNT_ELD);
-
-                aaceld_frame_sequence = 1;
-
-                cur_codec = 4;  // new codec ID for AAC-ELD
-                actual_bitrate=aaceld_bitrate; profile_pending=false;
-
-                avdtp_source_open_stream(media_tracker.avdtp_cid, media_tracker.local_seid, media_tracker.remote_seid);
-            }
-            else
-            {
-                printf("Config not handled: vendor=0x%08lx codec=0x%04x\n", (unsigned long)vendor_id, codec_id);
-            }
+            vendor_codec_configuration_received(packet, size);
             break;
-
         case AVDTP_SUBEVENT_STREAMING_CAN_SEND_MEDIA_PACKET_NOW:
             if (avdtp_subevent_streaming_can_send_media_packet_now_get_avdtp_cid(packet) != media_tracker.avdtp_cid ||
                 avdtp_subevent_streaming_can_send_media_packet_now_get_local_seid(packet) != media_tracker.local_seid) break;
             a2dp_demo_send_media_packet();
-            break;  
-
-
-        case AVDTP_SUBEVENT_SIGNALING_ACCEPT:
-            if (size < 8) break;
-            if (avdtp_subevent_signaling_accept_get_avdtp_cid(packet) != media_tracker.avdtp_cid) break;
-            signal_identifier = avdtp_subevent_signaling_accept_get_signal_identifier(packet);
-            if (is_cmd_triggered_localy){
-                is_cmd_triggered_localy = 0;
-                printf("AVDTP Source command accepted\n");
-            }
-            
-            switch (signal_identifier){
-                case AVDTP_SI_ACCEPT_START:
-                    if (avdtp_subevent_signaling_accept_get_local_seid(packet) == media_tracker.local_seid)
-                        avdtp_start_stream_accept(media_tracker.avdtp_cid, media_tracker.local_seid);
-                    break;
-                case AVDTP_SI_OPEN:
-                    break;
-                case AVDTP_SI_SET_CONFIGURATION:
-                    break;
-                case  AVDTP_SI_START:
-                    if (encoder_job.deferred_size) break;
-                    if (avdtp_subevent_signaling_accept_get_local_seid(packet) != media_tracker.local_seid) break;
-                    if (profile_pending || a2dp_connect_pending || !finish_scan_avdtp_codec) break;
-                    if (!aacp_audio_owned()) {
-                        a2dp_demo_timer_stop(&media_tracker);
-                        playback_idle_phase = PLAYBACK_SUSPENDING;
-                        playback_idle_transition_since = btstack_run_loop_get_time_ms();
-                        if (avdtp_source_suspend(media_tracker.avdtp_cid, media_tracker.local_seid) != ERROR_CODE_SUCCESS)
-                            playback_encoder_failed(&media_tracker);
-                        break;
-                    }
-                    printf("Stream started.\n");
-                    if (finish_scan_avdtp_codec){
-                        bool mic_repaired=mic_recovery_pending && mic_recovery_started &&
-                            mic_recovery_cid==media_tracker.avdtp_cid &&
-                            playback_idle_phase==PLAYBACK_STARTING;
-                        is_streaming = a2dp_demo_timer_start(&media_tracker);
-                        if (is_streaming) {
-                            set_led_mode_on();
-                            if (mic_repaired) {
-                                mic_recovery_pending=mic_recovery_started=false;
-                                if (++mic_recovery_revision==0) ++mic_recovery_revision;
-                            }
-                        }
-                    }
-                    break;
-                case AVDTP_SI_SUSPEND: {
-                    if (avdtp_subevent_signaling_accept_get_local_seid(packet) != media_tracker.local_seid) break;
-                    bool idle = playback_idle_phase == PLAYBACK_SUSPENDING;
-                    bool recover = suspend_recovery_pending;
-                    bool reset = recovery_reset_encoder;
-                    bool keep_phone = bridge_phone_recovering();
-                    critical_section_enter_blocking(&playback_pcm_lock);
-                    uint32_t usb_revision = usb_playback_revision;
-                    critical_section_exit(&playback_pcm_lock);
-                    a2dp_demo_timer_stop(&media_tracker);
-                    if (idle) playback_idle_phase = PLAYBACK_SUSPENDED;
-                    else if (recover) {
-                        phone_output_recovery = keep_phone;
-                        if (reset && !aaceld_encoder_init()) {
-                            phone_output_recovery = false;
-                            aacp_disconnect();
-                            a2dp_source_disconnect(media_tracker.avdtp_cid);
-                            break;
-                        }
-                        playback_idle_phase=PLAYBACK_STARTING;
-                        playback_idle_transition_since=btstack_run_loop_get_time_ms();
-                        if (avdtp_source_start_stream(media_tracker.avdtp_cid, media_tracker.local_seid) != ERROR_CODE_SUCCESS) {
-                            phone_output_recovery = false;
-                            aacp_disconnect();
-                            a2dp_source_disconnect(media_tracker.avdtp_cid);
-                        }
-                    }
-                    else {
-                        playback_peer_suspended = true;
-                        playback_peer_suspend_revision = usb_revision;
-                    }
-                    break;
-                }
-                case AVDTP_SI_ABORT:
-                case AVDTP_SI_CLOSE:
-                    printf("Stream released.\n");
-                    a2dp_demo_timer_stop(&media_tracker);
-                    break;
-                default:
-                    break;
-            }
             break;
-
+        case AVDTP_SUBEVENT_SIGNALING_ACCEPT:
+            signaling_command_accepted(packet, size);
+            break;
         case AVDTP_SUBEVENT_SIGNALING_REJECT:
         case AVDTP_SUBEVENT_SIGNALING_GENERAL_REJECT:
-            if (size != 8 || !a2dp_is_connected_flag || !media_tracker.avdtp_cid ||
-                avdtp_subevent_signaling_reject_get_is_initiator(packet) != 1 ||
-                memcmp(cur_active_device, (const uint8_t *)get_device_addr(), 6)) break;
-            if (avdtp_subevent_signaling_reject_get_avdtp_cid(packet) != media_tracker.avdtp_cid) break;
-            signal_identifier = avdtp_subevent_signaling_reject_get_signal_identifier(packet);
-            bool connection_query = signal_identifier == AVDTP_SI_DISCOVER ||
-                signal_identifier == AVDTP_SI_GET_CAPABILITIES || signal_identifier == AVDTP_SI_GET_ALL_CAPABILITIES;
-            if (!connection_query &&
-                avdtp_subevent_signaling_reject_get_local_seid(packet) != media_tracker.local_seid) break;
-            if (connection_query || signal_identifier == AVDTP_SI_SET_CONFIGURATION ||
-                signal_identifier == AVDTP_SI_OPEN || signal_identifier == AVDTP_SI_SUSPEND ||
-                signal_identifier == AVDTP_SI_START)
-                playback_encoder_failed(&media_tracker);
+            signaling_command_rejected(packet, size);
             break;
         case AVDTP_SUBEVENT_STREAMING_CONNECTION_RELEASED:
-            if (size != 6 || !a2dp_is_connected_flag || !media_tracker.avdtp_cid ||
-                avdtp_subevent_streaming_connection_released_get_local_seid(packet) != media_tracker.local_seid ||
-                memcmp(cur_active_device, (const uint8_t *)get_device_addr(), 6)) break;
-            if (avdtp_subevent_streaming_connection_released_get_avdtp_cid(packet) != media_tracker.avdtp_cid) break;
-            l2cap_set_flushable_local_cid(0);
-            // Media Close resets the SDK endpoint; a live signaling link alone cannot restart it.
-            playback_encoder_failed(&media_tracker);
-            printf("Streaming connection released.\n");
+            media_connection_released(packet, size);
             break;
         case AVDTP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:
-            if (avdtp_subevent_signaling_connection_released_get_avdtp_cid(packet) != media_tracker.avdtp_cid) break;
-            aaceld_variable_allowed = false;
-            avrcp_reconnect_reset();
-            mic_prepare_open=mic_recovery_pending=mic_recovery_started=false;
-            a2dp_demo_timer_stop(&media_tracker);
-            aacp_media_disconnected();
-            l2cap_set_flushable_local_cid(0);
-            audio_slot_queue_init();
-            playback_encoder_close();
-            a2dp_connect_pending = false;
-            media_tracker.avdtp_cid = 0;
-            media_tracker.local_seid = 0;
-            media_tracker.remote_seid = 0;
-            allow_switch_slot = true;
-            finish_scan_avdtp_codec = false;
-            a2dp_is_connected_flag = false;
-            cur_codec=0; actual_bitrate=0; reported_delay=UINT16_MAX; delay_revision=0;
-            cur_capability = 0;
-            set_led_mode_off();
-            a2dp_codec_configuration_released();
-            printf("Signaling connection released.\n");
+            signaling_connection_released(packet, size);
             break;
         default:
             break;

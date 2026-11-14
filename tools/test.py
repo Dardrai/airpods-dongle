@@ -144,23 +144,14 @@ def playback_lifecycle_sources(directory):
         end = source.index("\n}", start) + 2
         functions.append(source[start:end])
     (directory / "playback_lifecycle.inc").write_text("\n".join(functions))
-    start = source.index("        case AVDTP_SUBEVENT_SIGNALING_DELAY_REPORT:")
-    start = source.index("\n", start) + 1
-    end = source.index("        case ", start)
-    (directory / "playback_delay_report.inc").write_text(source[start:end])
-    start = source.index("        case AVDTP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:")
-    start = source.index("\n", start) + 1
-    end = source.index("        default:", start)
-    (directory / "playback_release.inc").write_text(source[start:end])
-    start = source.index("        case AVDTP_SUBEVENT_STREAMING_CONNECTION_ESTABLISHED:")
-    start = source.index("\n", start) + 1
-    end = source.index("        case ", start)
-    (directory / "playback_media_established.inc").write_text(source[start:end])
-    for name, case in [("playback_reject", "AVDTP_SUBEVENT_SIGNALING_GENERAL_REJECT"),
-                       ("playback_media_released", "AVDTP_SUBEVENT_STREAMING_CONNECTION_RELEASED")]:
-        start = source.index("        case " + case + ":")
-        start = source.index("\n", start) + 1
-        end = source.index("        case ", start)
+    # packet_handler's per-event handlers, still sliced because they share the media session state.
+    for name, signature in [("playback_delay_report", "static void delay_report_received("),
+                            ("playback_release", "static void signaling_connection_released("),
+                            ("playback_media_established", "static void media_connection_established("),
+                            ("playback_reject", "static void signaling_command_rejected("),
+                            ("playback_media_released", "static void media_connection_released(")]:
+        start = source.index("\n" + signature) + 1
+        end = source.index("\n}", start) + 2
         (directory / (name + ".inc")).write_text(source[start:end])
 
     functions = []
@@ -229,8 +220,8 @@ def playback_lifecycle_sources(directory):
         end = source.index("\n}", start) + 2
         functions.append(source[start:end])
     (directory / "playback_idle.inc").write_text("\n".join(functions))
-    start = source.index("                case  AVDTP_SI_START:")
-    end = source.index("                case AVDTP_SI_ABORT:", start)
+    start = source.index("        case  AVDTP_SI_START:")
+    end = source.index("        case AVDTP_SI_ABORT:", start)
     (directory / "playback_accept.inc").write_text(source[start:end])
     for name in ("playback_timing", "playback_bitrate", "playback_idle", "playback_lifecycle"):
         path = directory / (name + ".inc")

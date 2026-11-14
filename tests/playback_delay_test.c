@@ -58,14 +58,10 @@ uint8_t avdtp_source_set_configuration(uint16_t cid, uint8_t local, uint8_t remo
 }
 bool aacp_model_game_supported(void) { return model_supported; }
 
+#include "playback_delay_report.inc"
 static void receive_report(uint8_t cid, uint8_t seid, uint16_t size) {
     uint8_t bytes[8]={0,6,0,cid,0,seid,0x58,2};
-    const uint8_t *packet=bytes;
-    switch (0) {
-        case 0:
-#include "playback_delay_report.inc"
-        default: break;
-    }
+    delay_report_received(bytes,size);
 }
 
 static void incoming_eld_configuration_checks_current_endpoint_and_known_peer(void) {

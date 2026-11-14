@@ -187,8 +187,8 @@ static void gap_drop_link_key_for_bd_addr(uint8_t *p) {
 }
 static inline void bt_hci_retire_selected_peer(void) { memset(address, 0, sizeof(address)); ++selected_retirements; }
 static bool gap_start_scanning(void) { ++scans; return inquiry_ok; }
-static uint16_t avdtp_subevent_signaling_connection_released_get_avdtp_cid(const uint16_t *p) {
-    return *p;
+static uint16_t avdtp_subevent_signaling_connection_released_get_avdtp_cid(const uint8_t *p) {
+    return (uint16_t)p[3] | (uint16_t)p[4] << 8;
 }
 static void aacEncClose(void **handle) { *handle = NULL; }
 static void playback_encoder_close(void) {if(handleAAC)aacEncClose(&handleAAC);}
@@ -199,6 +199,7 @@ void avdtp_source_establish_stream(void);
 #include "playback_cancel.inc"
 static void bt_hci_airpods_flush_timeout(bool enabled) {(void)enabled;}
 #include "playback_lifecycle.inc"
+#define UNUSED(x) (void)(x)
 static struct { struct { uint16_t l2cap_media_cid; } *local_stream_endpoint; } sc;
 static uint16_t avdtp_subevent_streaming_connection_established_get_avdtp_cid(const uint8_t *p) {
     return (uint16_t)p[3] | (uint16_t)p[4] << 8;
@@ -209,27 +210,18 @@ static void avdtp_subevent_streaming_connection_established_get_bd_addr(const ui
 static uint8_t avdtp_subevent_streaming_connection_established_get_local_seid(const uint8_t *p) {return p[11];}
 static uint8_t avdtp_subevent_streaming_connection_established_get_remote_seid(const uint8_t *p) {return p[12];}
 static uint8_t avdtp_subevent_streaming_connection_established_get_status(const uint8_t *p) {return p[13];}
+typedef uint8_t bd_addr_t[6];
+#include "playback_media_established.inc"
 static void media_established(uint16_t cid, const uint8_t peer[6], uint8_t status_code, unsigned size) {
     uint8_t event[14]={0xD1,12,0, (uint8_t)cid,(uint8_t)(cid>>8)};
     for(unsigned i=0;i<6;++i)event[10-i]=peer[i];
     event[11]=2;event[12]=3;event[13]=status_code;
-    const uint8_t *packet=event;
-    uint8_t status, address[6];
-    uint16_t avdtp_cid;
-    (void)address;(void)size;
-    switch (0) {
-        case 0:
-#include "playback_media_established.inc"
-        default:break;
-    }
+    media_connection_established(event,(uint16_t)size);
 }
-static void signaling_released(uint16_t cid) {
-    const uint16_t *packet = &cid;
-    switch (0) {
-        case 0:
 #include "playback_release.inc"
-        default: break;
-    }
+static void signaling_released(uint16_t cid) {
+    uint8_t event[5]={0xD1,3,0,(uint8_t)cid,(uint8_t)(cid>>8)};
+    signaling_connection_released(event,sizeof(event));
 }
 
 static uint16_t avdtp_subevent_signaling_reject_get_avdtp_cid(const uint8_t *p) {
@@ -238,30 +230,19 @@ static uint16_t avdtp_subevent_signaling_reject_get_avdtp_cid(const uint8_t *p) 
 static inline uint8_t avdtp_subevent_signaling_reject_get_is_initiator(const uint8_t *p) {return p[6];}
 static inline uint8_t avdtp_subevent_signaling_reject_get_local_seid(const uint8_t *p) {return p[5];}
 static uint8_t avdtp_subevent_signaling_reject_get_signal_identifier(const uint8_t *p) {return p[7];}
+#include "playback_reject.inc"
 static void signaling_rejected(uint16_t cid, uint8_t seid, uint8_t signal, uint8_t initiator, bool general, unsigned size) {
     const uint8_t event[8]={0xD1,6,(uint8_t)(general?0x1E:0x1D),(uint8_t)cid,(uint8_t)(cid>>8),seid,initiator,signal};
-    const uint8_t *packet=event;
-    uint8_t signal_identifier;
-    (void)size;
-    switch (0) {
-        case 0:
-#include "playback_reject.inc"
-        default:break;
-    }
+    signaling_command_rejected((uint8_t *)event,(uint16_t)size);
 }
 static uint16_t avdtp_subevent_streaming_connection_released_get_avdtp_cid(const uint8_t *p) {
     return (uint16_t)p[3] | (uint16_t)p[4] << 8;
 }
 static inline uint8_t avdtp_subevent_streaming_connection_released_get_local_seid(const uint8_t *p) {return p[5];}
+#include "playback_media_released.inc"
 static void media_released(uint16_t cid, uint8_t seid, unsigned size) {
     const uint8_t event[6]={0xD1,4,0,(uint8_t)cid,(uint8_t)(cid>>8),seid};
-    const uint8_t *packet=event;
-    (void)size;
-    switch (0) {
-        case 0:
-#include "playback_media_released.inc"
-        default:break;
-    }
+    media_connection_released((uint8_t *)event,(uint16_t)size);
 }
 
 static void media_failure_fixture(void) {
