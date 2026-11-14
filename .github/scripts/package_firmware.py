@@ -19,6 +19,9 @@ CONFIGURATION = {"PICO_BOARD": "pico2_w", "CMAKE_BUILD_TYPE": "Release", "AIRPOD
                  "AACELD_CBR_BANDWIDTH": "20000"}
 FIRMWARE = {"airpods_dongle.uf2", "airpods_dongle.bin", "airpods_dongle.elf", "airpods_dongle.elf.map", "memory-check.json"}
 PAYLOADS = FIRMWARE | {"COMMIT.txt", "COMPILER.txt", "BUILD.json", "SOURCES.json", "source.tar.gz", "airpods-cli.zip", "THIRD-PARTY-NOTICES.txt"}
+# The CLI ZIP: airpods.py and every module it imports, plus its documentation and licences.
+CLI_FILES = ("tools/airpods.py", "tools/audio_diagnostics.py", "tools/airpods_att.py", "tools/airpods_hearing.py",
+             "tools/dongle_protocol.py", "docs/CLI.md", "LICENSE", "LICENSE.Apache-2.0")
 SDK_NOTICES = ("LICENSE.TXT", "src/rp2_common/cmsis/stub/CMSIS/LICENSE.txt", "src/rp2_common/pico_printf/LICENSE",
                "src/rp2_common/pico_btstack/LICENSE.RP", "lib/btstack/LICENSE", "lib/tinyusb/LICENSE",
                "lib/cyw43-driver/LICENSE", "lib/cyw43-driver/LICENSE.RP")
@@ -128,9 +131,8 @@ def package(root, build, sdk):
     (output / "THIRD-PARTY-NOTICES.txt").write_text(notices(root, sdk), encoding="utf-8")
     with (output / "source.tar.gz").open("wb") as archive:
         subprocess.run(["git", "-C", str(root), "archive", "--format=tar.gz", "--prefix=airpods-dongle/", commit], stdout=archive, check=True)
-    cli_files = ("tools/airpods.py", "tools/audio_diagnostics.py", "tools/airpods_att.py", "tools/airpods_hearing.py", "docs/CLI.md", "LICENSE", "LICENSE.Apache-2.0")
     with zipfile.ZipFile(output / "airpods-cli.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name in cli_files:
+        for name in CLI_FILES:
             archive.writestr(zipfile.ZipInfo("airpods-cli/" + name), (root / name).read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
         archive.writestr(zipfile.ZipInfo("airpods-cli/README.md"), "# AirPods command line\n\nPython 3.10+, no extra packages. From this directory run `python tools/airpods.py help`. See docs/CLI.md.\n")
         archive.writestr(zipfile.ZipInfo("airpods-cli/COMMIT.txt"), commit + "\n")
@@ -260,8 +262,9 @@ def self_test():
         with tarfile.open(fileobj=io.BytesIO(archived)) as archive:
             assert set(archive.getnames()) == {"tracked.c", ".gitignore"}
         with zipfile.ZipFile(root / "cli.zip", "w") as archive:
-            for name in ("tools/airpods.py", "tools/audio_diagnostics.py", "tools/airpods_att.py", "tools/airpods_hearing.py"):
-                archive.write(ROOT / name, "airpods-cli/" + name)
+            for name in CLI_FILES:
+                if name.endswith(".py"):
+                    archive.write(ROOT / name, "airpods-cli/" + name)
         with zipfile.ZipFile(root / "cli.zip") as archive:
             archive.extractall(root / "extracted")
         cli = str(root / "extracted/airpods-cli/tools/airpods.py")
