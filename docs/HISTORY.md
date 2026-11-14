@@ -25,10 +25,10 @@ phone dongles through USB audio and Bluetooth relay. It combines the
 [Android/dongle protocol alignment](ANDROID-PROTOCOL-PARITY.md). CI publishes
 one checked image; a successful build is not a hardware listening acceptance.
 
-The earlier [0.1.57-r6 release](UNIFIED-FIRMWARE-20261030.md) and
-[controller research checkpoint](CYW43439-RESEARCH-CHECKPOINT-20261030.md)
+The earlier [0.1.57-r6 release](archive/UNIFIED-FIRMWARE-20261030.md) and
+[controller research checkpoint](archive/CYW43439-RESEARCH-CHECKPOINT-20261030.md)
 remain historical references. The shared transport repairs and their evidence
-are documented in the [transport investigation](VALIDATION-0.1.57.md).
+are documented in the [transport investigation](archive/VALIDATION-0.1.57.md).
 
 Candidate **0.1.48** preserves native AirPods volume steps and publishes the
 confirmed level through USB hardware volume. It removes the relative HID key
@@ -38,7 +38,7 @@ firmware alone cannot set Android's mixer policy. Full regression, codec,
 firmware and linked-memory checks pass. The PC board is updated with pairing
 preserved; the listener accepted the native-volume comparison as much better.
 Android and extended lifecycle checks remain pending.
-See [validation](VALIDATION-0.1.48.md) and
+See [validation](archive/VALIDATION-0.1.48.md) and
 [native gain and host integration](HOST-VOLUME.md).
 
 Candidate **0.1.47** preserves fine USB volume requests when the AirPods confirm
@@ -49,7 +49,7 @@ Build and regression checks pass. The PC board is updated with pairing preserved
 normal controller timeout is confirmed. The listener still reported the
 stem-volume dip/rebound; 0.1.48 replaces that underlying relay. Game Mode
 listening validation remains pending.
-See [validation](VALIDATION-0.1.47.md).
+See [validation](archive/VALIDATION-0.1.47.md).
 
 Candidate **0.1.46** allows an explicit runtime BOOTSEL request during playback,
 recording, calls or audio transitions. It interrupts audio through the SDK's
@@ -58,7 +58,7 @@ identity checks. It does not wait for Android to release USB audio. Older firmwa
 may need one physical BOOTSEL update before this works. Both boards were tested
 on 0.1.46, with pairing storage verified unchanged. The Pixel's USB playback was
 active when remote BOOTSEL entry passed; the board restarted and the listener
-confirmed music returned in both ears. See [validation](VALIDATION-0.1.46.md)
+confirmed music returned in both ears. See [validation](archive/VALIDATION-0.1.46.md)
 and the [runtime update protocol](USB-CONTROL.md#usb-bootloader-entry).
 
 Candidate **0.1.45** fixes volume drift across pause/resume and cancels stale
@@ -81,7 +81,7 @@ Both builds and all offline checks passed. Both lab dongles previously ran
 0.1.44, pairing storage verified unchanged. Startup checks saw control-only USB
 on the disconnected PC dongle and automatic audio return after the Pixel dongle
 reconnected to the AirPods. Listening and power measurements remain open.
-See [0.1.44 validation and hardware checks](VALIDATION-0.1.44.md).
+See [0.1.44 validation and hardware checks](archive/VALIDATION-0.1.44.md).
 
 Candidate **0.1.43** adds the renewed audit fixes: bounded, cancelable takeover
 Pause; explicit automatic USB Pause without changing stem toggles; and rejection
@@ -90,7 +90,7 @@ optimisation reduces that render path's emulated instruction work by 26–29%.
 Idle USB service drops from 2,000 to 250 calls per second when audio endpoints
 and the diagnostic terminal are closed; the fully idle main-loop target drops
 from 1,000 to 200 passes per second. Audio and transition paths retain their fast
-cadence. See the [0.1.42 re-audit and 0.1.43 changes](AUDIT-0.1.42.md)
+cadence. See the [0.1.42 re-audit and 0.1.43 changes](archive/AUDIT-0.1.42.md)
 for evidence, host limits and power-measurement requirements. These are offline
 results; 0.1.43 is not flashed or listening/power accepted.
 
@@ -102,7 +102,7 @@ playback remain silent after the sender catches up. Hearing the final candidate
 on hardware remains necessary; these are regression results, not audio acceptance.
 Both lab dongles previously ran 0.1.42, with pairing storage preserved. All
 build checks passed, and a silent Windows stream verified actual IEEE float32
-USB input. See [0.1.42 validation and next checks](VALIDATION-0.1.42.md).
+USB input. See [0.1.42 validation and next checks](archive/VALIDATION-0.1.42.md).
 
 Version **0.1.41** keeps USB audio absent for the selected Bluetooth phone
 connection, including paused playback, failed media setup and retries. An
@@ -112,7 +112,7 @@ alone do not select it. CDC/HID return after a brief USB re-enumeration. An
 existing USB microphone request retains priority. Its Pixel route checks passed,
 including loss of the media profile with the phone connection still present.
 Its Bluetooth playback still failed; 0.1.42 corrects the scheduling defects above.
-See the [renewed firmware audit](AUDIT-0.1.39.md) for reproduced faults,
+See the [renewed firmware audit](archive/AUDIT-0.1.39.md) for reproduced faults,
 rejected buffer-only fixes, and hardware checks still needed.
 
 Version **0.1.40** restored USB too early after a failed media startup; 0.1.41

@@ -53,7 +53,7 @@ logging or changes the radio configuration.
 Feature 19 and `tools/audio_diagnostics.py --radio` expose the cached observations
 and adaptation decisions on Windows or the rooted Pixel. The collector samples
 every two seconds. Exact fields and unknown-value rules are in
-[CONTROL-EXTENSIONS.md](CONTROL-EXTENSIONS.md#radio-and-automatic-bitrate-snapshot).
+[CONTROL-EXTENSIONS.md](../CONTROL-EXTENSIONS.md#radio-and-automatic-bitrate-snapshot).
 
 ## Validation status
 

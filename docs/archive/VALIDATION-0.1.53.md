@@ -19,7 +19,7 @@ The local CBR ceiling reserves that byte: under a 256000-bits/s variable ceiling
 the maximum local CBR budget is 255200. Lower requests such as 220000 stay
 unchanged when they fit. The requested setting and local encoder mode are
 preserved; status reports the effective local budget. See the
-[control contract](CONTROL-EXTENSIONS.md) and [AAC-ELD protocol](../aac-eld-apple.md).
+[control contract](../CONTROL-EXTENSIONS.md) and [AAC-ELD protocol](../../aac-eld-apple.md).
 
 A fixed-only peer retains a fixed CBR configuration and cannot trigger live
 adaptation. If variable permission cannot accommodate 128000 CBR plus alignment

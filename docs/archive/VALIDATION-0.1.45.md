@@ -25,7 +25,7 @@ the arbitrary anchor does not align those two gain authorities.
 ## Explicit host authority
 
 Capability 128 and typed features 16/17 provide the bounded
-[host volume contract](HOST-VOLUME.md). They expose fresh physical readback and
+[host volume contract](../HOST-VOLUME.md). They expose fresh physical readback and
 separate pending/in-flight requests. A five-second, USB-client/session/peer/CID
 lease suppresses legacy HID volume steps, anchor repair, headroom adjustments
 and UAC gain echo. Expiry/release cancels unsent owned writes and retains actual

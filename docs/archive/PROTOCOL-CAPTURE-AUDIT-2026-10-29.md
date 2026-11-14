@@ -68,7 +68,7 @@ key request. Compared with macOS/NTPods it omits:
 The manual-volume run used modified SDP attributes and lacked independently
 marked gestures. It establishes a wire difference, not a ready-made volume fix.
 The native handler calls it feedback; it is not a command enabling stem control.
-See [volume evidence](VOLUME-EVIDENCE.md).
+See [volume evidence](../VOLUME-EVIDENCE.md).
 
 The Pico's `0x4D` mask is `0x00FF`; the saved native envelope includes `0xF2FF`.
 Native binary analysis associates bit `0x0200` with hearing support. Copying the

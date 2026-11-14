@@ -9,7 +9,7 @@ Another chat was building Android software on the PC during the earlier run;
 that possible host-load difference must be excluded from the next comparison.
 
 Version 0.1.49 adds diagnostic feature 18, documented in
-[CONTROL-EXTENSIONS.md](CONTROL-EXTENSIONS.md). It temporarily requests a 200 ms
+[CONTROL-EXTENSIONS.md](../CONTROL-EXTENSIONS.md). It temporarily requests a 200 ms
 controller timeout while preserving Game Mode's receiver target, packet grouping
 and clock policy. It does not change the default timeout policy or volume path.
 The override expires after 120 seconds, cannot be renewed by repeated enable

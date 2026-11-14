@@ -47,7 +47,7 @@ to remove a USB call's audio devices. Selecting Bluetooth while USB recording
 is active remains subject to that priority.
 
 This mode change addresses host routing, not Bluetooth radio delivery. The
-[0.1.39 audit](AUDIT-0.1.39.md) documents the separate audio stalls and the narrow
+[0.1.39 audit](archive/AUDIT-0.1.39.md) documents the separate audio stalls and the narrow
 overflow-accounting correction. Pixel testing confirmed that 0.1.40 removed the
 USB sound card while CDC/HID remained usable, but its media-profile-only lifetime
 restored USB during a failed startup. That fallback was captured and is the
@@ -59,12 +59,12 @@ media became enabled too; it is covered by the host regression, not that hardwar
 
 ## Bluetooth recovery candidate 0.1.56
 
-The later [0.1.57 offline investigation](VALIDATION-0.1.57.md) reproduces a
+The later [0.1.57 offline investigation](archive/VALIDATION-0.1.57.md) reproduces a
 separate CYW43 driver fault: ring-full writes were discarded while reported as
 successful. Its asynchronous transport repair passed the full build and
 sanitizer checks, but has not been installed or accepted by listening.
 
-[0.1.56 validation](VALIDATION-0.1.56.md) records the current R3 build and phone
+[0.1.56 validation](archive/VALIDATION-0.1.56.md) records the current R3 build and phone
 deployment, bounded media-profile recovery after output loss, and retention of
 phone catch-up deadlines while PCM is still available. It also documents pairing
 RAM/ACL retirement and the new-selection/old-signaling race. These changes retain
@@ -233,7 +233,7 @@ Consumer Pause (`0xB1`), expires if delayed, and is canceled when ownership
 returns. Intentional stem Play/Pause remains `0xCD`. Android's generic mapping
 may ignore explicit USB Pause; no toggle fallback risks resuming an already
 paused player. Command delivery does not prove the host application paused.
-See the [re-audit](AUDIT-0.1.42.md) for the reproduced failures and host limitation.
+See the [re-audit](archive/AUDIT-0.1.42.md) for the reproduced failures and host limitation.
 
 LibrePods connects to the saved phone's encrypted, bonded RFCOMM service for
 device settings, hearing profiles, saved checks, audio profiles, performance
