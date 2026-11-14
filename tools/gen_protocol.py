@@ -422,85 +422,91 @@ def wrap_py(line, limit=100):
 # ---------------------------------------------------------------- C vectors (host tests only)
 
 def vectors_c(spec, vectors):
-    """Flatten vectors.json into C initializers, resolving names through the spec."""
+    """Flatten vectors.json into C initializers, resolving spec names to numbers."""
+    control, rpc = spec["control"], spec["rpc"]
     settings = by_name(spec["settings"])
-    features = by_name(spec["features"])
+
+    def value_of(group, name):
+        return name if isinstance(name, int) else by_name(group)[name]["value"]
 
     def blob(hex_text):
         data = bytes.fromhex(hex_text)
         return "(const uint8_t[]){" + (",".join(str(b) for b in data) or "0") + "}," + str(len(data))
 
-    def setting_value(setting, value):
-        if isinstance(value, int):
-            return value
-        values = by_name(setting["domain"]["values"])
-        return values[value]["value"]
+    def array(values, suffix=""):
+        return "{" + ",".join(f"{v}{suffix}" for v in values) + "}"
 
-    out = ["// Generated from protocol/vectors.json by tools/gen_protocol.py --vectors-c.",
+    def boolean(value):
+        return "true" if value else "false"
+
+    def setting_value(setting, value):
+        return value_of(setting["domain"]["values"], value) if isinstance(value, str) else value
+
+    out = ["// Generated from protocol/vectors.json by tools/gen_protocol.py --vectors-c. Host tests only.",
            "#include <stdbool.h>", "#include <stdint.h>", ""]
-    out.append("typedef struct { const char *name; const uint8_t *data; unsigned size; bool valid;"
-               " uint8_t opcode, argument; uint32_t generation, sequence; } command_vector_t;")
+    out.append("typedef struct { const char *name; const uint8_t *data; unsigned size; bool valid; uint8_t opcode;"
+               " uint32_t connection_generation; uint8_t selected_address[6]; uint32_t command_sequence;"
+               " uint8_t argument; } command_vector_t;")
     out.append("static const command_vector_t command_vectors[] = {")
     for v in vectors["control_commands"]:
-        f = v.get("fields", {})
-        out.append(f"    {{{json.dumps(v['name'])},{blob(v['hex'])},{str(v['valid']).lower()},"
-                   f"{f.get('opcode', 0)},{f.get('argument', 0)},{f.get('generation', 0)}u,{f.get('sequence', 0)}u}},")
+        f = v.get("fields")
+        fields = (f"{value_of(control['command']['opcodes'], f['opcode'])},{f['connection_generation']}u,"
+                  f"{array(bytes.fromhex(f['selected_address']))},{f['command_sequence']}u,{f['argument']}"
+                  if f else "0,0u,{0},0u,0")
+        out.append(f"    {{{json.dumps(v['name'])},{blob(v['hex'])},{boolean(v['valid'])},{fields}}},")
     out.append("};")
 
-    control = spec["control"]["status"]
-    out.append("typedef struct { const char *name; const uint8_t *data; unsigned size; uint8_t flags; uint32_t generation;"
-               " uint8_t address[6], listening_mode, battery[3], charging, codec; uint32_t ages[3], last_sequence;"
-               " uint8_t result, last_opcode; uint16_t capabilities; uint8_t present, case_source; } status_vector_t;")
+    status = control["status"]
+    out.append("typedef struct { const char *name; const uint8_t *data; unsigned size; uint8_t flags;"
+               " uint32_t connection_generation; uint8_t selected_address[6], listening_mode, battery_percent[3],"
+               " charging_components, output_codec; uint32_t battery_ages_milliseconds[3], last_command_sequence;"
+               " uint8_t last_command_result, last_command_opcode; uint16_t capabilities;"
+               " uint8_t present_components, case_observed_components; } status_vector_t;")
     out.append("static const status_vector_t status_vectors[] = {")
-    flags = by_name(control["flags"])
-    caps = by_name(control["capabilities"])
-    results = by_name(spec["control"]["results"])
     for v in vectors["control_status"]:
         f = v["fields"]
         out.append(
-            f"    {{{json.dumps(v['name'])},{blob(v['hex'])},{sum(flags[n]['value'] for n in f['flags'])},"
-            f"{f['generation']}u,{{{','.join(str(b) for b in bytes.fromhex(f['address']))}}},"
-            f"{by_name(spec['control']['listening_modes'])[f['listening_mode']]['value']},"
-            f"{{{','.join(str(b) for b in f['battery'])}}},{f['charging']},"
-            f"{by_name(spec['control']['codecs'])[f['codec']]['value']},"
-            f"{{{','.join(str(a) + 'u' for a in f['battery_ages'])}}},{f['last_sequence']}u,"
-            f"{results[f['result']]['value']},{f['last_opcode']},{sum(caps[n]['value'] for n in f['capabilities'])},"
-            f"{f['present']},{f['case_source']}}},")
+            f"    {{{json.dumps(v['name'])},{blob(v['hex'])},"
+            f"{sum(value_of(status['flags'], n) for n in f['flags'])},{f['connection_generation']}u,"
+            f"{array(bytes.fromhex(f['selected_address']))},{value_of(control['listening_modes'], f['listening_mode'])},"
+            f"{array(f['battery_percent'])},{f['charging_components']},{value_of(control['codecs'], f['output_codec'])},"
+            f"{array(f['battery_ages_milliseconds'], 'u')},{f['last_command_sequence']}u,"
+            f"{value_of(control['results'], f['last_command_result'])},{f['last_command_opcode']},"
+            f"{sum(value_of(status['capabilities'], n) for n in f['capabilities'])},"
+            f"{f['present_components']},{f['case_observed_components']}}},")
     out.append("};")
 
-    rpc = spec["rpc"]
     out.append("typedef struct { const char *name; const uint8_t *data; unsigned size; bool request_valid;"
-               " uint8_t operation; uint32_t generation, sequence; uint16_t total, offset; uint8_t length, phase;"
-               " const uint8_t *payload; unsigned payload_size; } rpc_vector_t;")
+               " uint8_t operation; uint32_t connection_generation, transaction_sequence; uint16_t total_length,"
+               " fragment_offset; uint8_t fragment_length, response_phase; const uint8_t *payload;"
+               " unsigned payload_size; } rpc_vector_t;")
     out.append("static const rpc_vector_t rpc_vectors[] = {")
     for v in vectors["rpc_frames"]:
         f = v["fields"]
         out.append(
-            f"    {{{json.dumps(v['name'])},{blob(v['hex'])},{str(v['request_valid']).lower()},"
-            f"{by_name(rpc['operations'])[f['operation']]['value'] if isinstance(f['operation'], str) else f['operation']},"
-            f"{f['generation']}u,{f['sequence']}u,{f['total']},{f['offset']},{f['length']},"
-            f"{by_name(rpc['phases'])[f['phase']]['value']},{blob(f['payload'])}}},")
+            f"    {{{json.dumps(v['name'])},{blob(v['hex'])},{boolean(v['request_valid'])},"
+            f"{value_of(rpc['operations'], f['operation'])},{f['connection_generation']}u,{f['transaction_sequence']}u,"
+            f"{f['total_length']},{f['fragment_offset']},{f['fragment_length']},"
+            f"{value_of(rpc['phases'], f['response_phase'])},{blob(f['payload'])}}},")
     out.append("};")
 
     out.append("typedef struct { const char *name; const uint8_t *data; unsigned size; uint8_t feature;"
-               " uint8_t setting; uint32_t value; bool has_setting; } feature_vector_t;")
+               " bool writes_setting; uint8_t setting; uint32_t value; } feature_vector_t;")
     out.append("static const feature_vector_t feature_vectors[] = {")
     for v in vectors["features"]:
         s = settings.get(v.get("setting", ""))
-        value = setting_value(s, v["value"]) if s else 0
-        out.append(f"    {{{json.dumps(v['name'])},{blob(v['payload'])},{features[v['feature']]['value']},"
-                   f"{s['id'] if s else 0},{value}u,{str(bool(s)).lower()}}},")
+        out.append(f"    {{{json.dumps(v['name'])},{blob(v['payload'])},{value_of(spec['features'], v['feature'])},"
+                   f"{boolean(s)},{s['id'] if s else 0},{setting_value(s, v['value']) if s else 0}u}},")
     out.append("};")
 
     out.append("typedef struct { const char *name; const uint8_t *data; unsigned size; uint8_t listening_mode,"
-               " battery[3], charging; bool known[3]; } readback_vector_t;")
+               " battery_percent[3], charging_components; bool known[3]; } readback_vector_t;")
     out.append("static const readback_vector_t readback_vectors[] = {")
     for v in vectors["aacp_readback"]:
-        e = v["expect"]
+        x = v["expect"]
         out.append(f"    {{{json.dumps(v['name'])},{blob(v['hex'])},"
-                   f"{by_name(spec['control']['listening_modes'])[e['listening_mode']]['value']},"
-                   f"{{{','.join(str(b) for b in e['battery'])}}},{e['charging']},"
-                   f"{{{','.join(str(k).lower() for k in e['known'])}}}}},")
+                   f"{value_of(control['listening_modes'], x['listening_mode'])},{array(x['battery_percent'])},"
+                   f"{x['charging_components']},{array(boolean(k) for k in x['known'])}}},")
     out.append("};")
 
     out.append("typedef struct { const uint8_t *data; unsigned size; uint32_t at; } timed_packet_t;")
@@ -510,7 +516,7 @@ def vectors_c(spec, vectors):
     for v in vectors["settings_sessions"]:
         packets = ",".join(f"{{{blob(p['hex'])},{p['at']}u}}" for p in v["packets"])
         out.append(f"    {{{json.dumps(v['name'])},(const timed_packet_t[]){{{packets}}},{len(v['packets'])},"
-                   f"{v['now']}u,{str(v['extended']).lower()},{blob(v['snapshot'])}}},")
+                   f"{v['now']}u,{boolean(v['extended'])},{blob(v['snapshot'])}}},")
     out.append("};")
 
     out.append("typedef struct { uint8_t setting; uint32_t value; bool valid; } value_vector_t;")
@@ -519,13 +525,14 @@ def vectors_c(spec, vectors):
         s = settings[v["setting"]]
         for valid in (True, False):
             for value in v["valid" if valid else "invalid"]:
-                out.append(f"    {{{s['id']},{setting_value(s, value)}u,{str(valid).lower()}}},")
+                out.append(f"    {{{s['id']},{setting_value(s, value)}u,{boolean(valid)}}},")
     out.append("};")
 
-    out.append("typedef struct { const char *name; const uint8_t *data; unsigned size; bool valid; unsigned requests; } phone_vector_t;")
+    out.append("typedef struct { const char *name; const uint8_t *data; unsigned size; bool valid;"
+               " unsigned requests; } phone_vector_t;")
     out.append("static const phone_vector_t phone_vectors[] = {")
     for v in vectors["phone_frames"]:
-        out.append(f"    {{{json.dumps(v['name'])},{blob(v['hex'])},{str(v['valid']).lower()},{v['requests']}}},")
+        out.append(f"    {{{json.dumps(v['name'])},{blob(v['hex'])},{boolean(v['valid'])},{v['requests']}}},")
     out.append("};")
     out.append("#define VECTOR_COUNT(a) (sizeof(a) / sizeof((a)[0]))")
     return "\n".join(out) + "\n"

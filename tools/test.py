@@ -412,6 +412,7 @@ def main():
         "main_idle": ["tests/main_idle_test.c"],
         "bootsel_request": ["tests/bootsel_request_test.c"],
         "dongle_protocol": ["tests/dongle_protocol_test.c"],
+        "protocol_vectors": ["tests/protocol_vectors_test.c"],
         "dongle_control": ["-Itests/aacp_stubs", "-Itests/cdc_stubs", "-Wno-unused-function", "tests/dongle_control_test.c"],
         "dongle_rpc": ["-Itests/aacp_stubs", "-Itests/cdc_stubs", "-Wno-unused-function", "tests/dongle_rpc_test.c"],
         "dongle_lease": ["-Itests/aacp_stubs", "-Itests/cdc_stubs", "-Wno-unused-function", "tests/dongle_lease_test.c"],
@@ -438,6 +439,8 @@ def main():
         uac_sources(pathlib.Path(tmp))
         usb_descriptor_sources(pathlib.Path(tmp))
         main_button_sources(pathlib.Path(tmp))
+        subprocess.run([sys.executable, str(ROOT / "tools/gen_protocol.py"), "--vectors-c",
+                        str(pathlib.Path(tmp) / "protocol_vectors.inc")], cwd=ROOT, check=True)
         for name, sources in tests.items():
             binary = pathlib.Path(tmp) / name
             command = [args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-g", "-O1"]
