@@ -7,35 +7,9 @@
 #include <string.h>
 #include "../tinyusb/dongle_protocol.h"
 
-// Value validation and model masks mirror NTPods device_settings/device-models.
-static const uint8_t setting_ids[] = {
-    0x01,0x0a,0x0d,0x16,0x17,0x18,0x1a,0x1b,0x1c,0x1f,0x20,0x23,
-    0x24,0x25,0x26,0x28,0x2e,0x31,0x34,0x35,0x36,0x3b,0x40,
-    0x37,0x2f // Append controls to preserve the existing model-mask bit positions.
-};
-#define DONGLE_SETTING_COUNT (sizeof(setting_ids) / sizeof(setting_ids[0]))
-#define DONGLE_LEGACY_SETTING_COUNT 23u
-typedef struct {
-    uint16_t models[3];
-    uint32_t controls;
-    bool listening, adaptive, allow_off_option, silent_allow_off;
-} setting_profile_t;
-static const setting_profile_t setting_profiles[] = {
-    {{1523,1722,0},       0x00000203,false,false,false,false},
-    {{2032,2031,0},       0x00000603,false,false,false,false},
-    {{2565,2564,0},       0x0020163b,false,false,false,false},
-    {{3053,3050,3054},    0x0028563b,false,false,false,false},
-    {{3056,3055,3057},    0x006bd6ff,true,true,false,false},
-    {{3531,3532,3533},    0x0029d6ff,true,true,false,false},
-    {{3439,3440,3441},    0x006bfeff,true,true,false,false},
-    {{2084,2083,0},       0x002016ff,true,false,false,false},
-    {{2931,2699,2698},    0x017ffeff,true,true,true,false},
-    {{3047,3048,3049},    0x017ffeff,true,true,true,false},
-    {{3063,3064,3065},    0x01fffeff,true,true,true,true},
-    {{2096,3184,0},       0x00201746,true,false,false,false},
-    {{3454,0,0},          0x0029d746,true,true,false,false},
-    {{3157,0,0},          0x00000006,true,false,false,false},
-};
+// The catalog (setting_ids), DONGLE_SETTING_COUNT and per-model profiles are generated
+// from protocol/dongle-protocol.json; catalog indices are model-mask bit positions.
+#include "dongle_settings_spec.h"
 typedef struct { uint32_t value, updated, revision; bool known; } setting_report_t;
 typedef struct {
     setting_report_t reports[DONGLE_SETTING_COUNT];
@@ -49,27 +23,10 @@ static inline int setting_index(uint8_t id) {
     return -1;
 }
 static inline bool setting_value_valid(uint8_t id, uint32_t value) {
-    switch(id) {
-        case 0x0a: case 0x1b: case 0x20: case 0x25: case 0x26: case 0x28:
-        case 0x2f: case 0x31: case 0x34: case 0x35: case 0x36: case 0x37: case 0x3b: case 0x1c:
-            return value==1 || value==2;
-        case 0x01: case 0x17: case 0x18: case 0x23: return value<=2;
-        case 0x0d: return value>=1 && value<=4;
-        case 0x16: return value<=0xffff && ((value&255)==1 || (value&255)==5) &&
-            (((value>>8)&255)==1 || ((value>>8)&255)==5);
-        case 0x1a: {
-            unsigned bits=0;
-            for (unsigned i=0;i<4;++i) bits+=(value>>i)&1u;
-            return value<=15 && bits>=2;
-        }
-        case 0x1f: return (value>>8)==0x50 && (value&255)<=100;
-        case 0x24: return value==0x0200 || value==0x0300;
-        case 0x2e: case 0x40: return value<=100;
-        default: return false;
-    }
+    return dongle_setting_value_valid(id, value);
 }
 static inline bool setting_explicit_choice(uint8_t id) {
-    return id==0x01 || id==0x0a || id==0x16 || id==0x1a || id==0x23 || id==0x31 || id==0x40;
+    return dongle_setting_explicit_choice(id);
 }
 static inline void settings_reset(dongle_settings_t *s) {
     memset(s,0,sizeof(*s)); s->allow_off_requested=-1;
@@ -111,7 +68,7 @@ static inline void settings_metadata(dongle_settings_t *s, const uint8_t *p, uns
     const setting_profile_t *previous=s->profile;
     int8_t requested=s->allow_off_requested;
     s->profile=NULL; s->firmware_major=0; s->allow_off_requested=-1;
-    if (n<11 || n>384 || p[4]!=0x1d || p[5]) return;
+    if (n<11 || n>384 || p[AACP_OPCODE_OFFSET]!=AACP_OP_METADATA || p[5]) return;
     const uint8_t *fields[11]; unsigned lengths[11], offset=11;
     for (unsigned i=0;i<11;++i) {
         if (offset>=n) return;
@@ -136,19 +93,21 @@ static inline void settings_metadata(dongle_settings_t *s, const uint8_t *p, uns
     if (!s->firmware_major) s->firmware_major=setting_packed_major(fields[10],lengths[10]);
 }
 static inline void settings_packet(dongle_settings_t *s, const uint8_t *p, unsigned n, uint32_t now) {
-    if (!p || n<6 || memcmp(p,"\x04\0\x04\0",4) || p[5]) return;
-    if (p[4]==0x1d) { settings_metadata(s,p,n); return; }
-    if (p[4]!=9 || n<7) return;
-    int index=setting_index(p[6]);
+    if (!p || n<6 || memcmp(p,AACP_HEADER,AACP_HEADER_SIZE) || p[5]) return;
+    if (p[AACP_OPCODE_OFFSET]==AACP_OP_METADATA) { settings_metadata(s,p,n); return; }
+    if (p[AACP_OPCODE_OFFSET]!=AACP_OP_CONTROL || n<7) return;
+    uint8_t id=p[AACP_CONTROL_ID_OFFSET];
+    int index=setting_index(id);
     if (index<0) return;
     setting_report_t *r=&s->reports[index];
     if (++r->revision==0) ++r->revision;
     r->known=false;
-    if (n!=11) return;
-    uint32_t value=dongle_u32(p+7);
-    if (p[6]==0x16) value&=0xffff; // Upper bytes hold previous actions, not commands.
-    if (!setting_value_valid(p[6],value)) return;
-    if (p[6]==0x34) s->allow_off_requested=-1;
+    if (n!=AACP_CONTROL_PACKET_SIZE) return;
+    uint32_t value=dongle_u32(p+AACP_CONTROL_VALUE_OFFSET);
+    // Upper bytes hold previous actions, not commands.
+    if (id==DONGLE_SETTING_HOLD_ACTIONS) value&=DONGLE_SETTING_HOLD_ACTIONS_REPORT_MASK;
+    if (!setting_value_valid(id,value)) return;
+    if (id==DONGLE_SETTING_ALLOW_OFF) s->allow_off_requested=-1;
     r->value=value; r->updated=now; r->known=true;
 }
 static inline bool setting_report_is(const dongle_settings_t *s, uint8_t id, uint32_t value) {
@@ -158,45 +117,52 @@ static inline bool setting_report_is(const dongle_settings_t *s, uint8_t id, uin
 static inline bool settings_allow_off(const dongle_settings_t *s) {
     if (s->profile) {
         if (!s->profile->listening) return false;
-        if (!s->profile->allow_off_option) return !setting_report_is(s,0x34,2);
+        if (!s->profile->allow_off_option)
+            return !setting_report_is(s,DONGLE_SETTING_ALLOW_OFF,DONGLE_SETTING_ALLOW_OFF_OFF);
     }
     if (s->allow_off_requested>=0) return s->allow_off_requested!=0;
-    if (setting_report_is(s,0x34,1)) return true;
-    if (setting_report_is(s,0x34,2)) return false;
-    return setting_report_is(s,0x0d,1) || (s->profile && s->firmware_major>=1 && s->firmware_major<=6);
+    if (setting_report_is(s,DONGLE_SETTING_ALLOW_OFF,DONGLE_SETTING_ALLOW_OFF_ON)) return true;
+    if (setting_report_is(s,DONGLE_SETTING_ALLOW_OFF,DONGLE_SETTING_ALLOW_OFF_OFF)) return false;
+    return setting_report_is(s,DONGLE_SETTING_LISTENING_MODE,DONGLE_SETTING_LISTENING_MODE_OFF) ||
+        (s->profile && s->firmware_major>=1 && s->firmware_major<=6);
 }
 static inline bool settings_supported(const dongle_settings_t *s, uint8_t id, uint32_t value) {
     int index=setting_index(id);
     if (index<0 || !setting_value_valid(id,value)) return false;
     bool supported=s->profile ? (s->profile->controls&(UINT32_C(1)<<index))!=0 :
-        id==0x01 || id==0x0a || id==0x0d || id==0x16 || id==0x17 || id==0x18 ||
-        id==0x1a || id==0x1b || id==0x1f || id==0x23 || id==0x24 || id==0x31 || id==0x3b || id==0x40;
+        dongle_setting_unknown_model(id);
     if (!supported) return false;
     bool adaptive=s->profile && s->profile->adaptive && s->firmware_major>=6;
-    if (id==0x16 && s->profile && !s->profile->listening &&
-        ((value&255)==1 || ((value>>8)&255)==1)) return false;
-    if (id==0x0d && ((value==4 && !adaptive) || (value==1 && !settings_allow_off(s)))) return false;
-    if (id==0x1a && (((value&8) && !adaptive) || ((value&1) && !settings_allow_off(s)))) return false;
-    if ((id==0x2e && !adaptive) || (id==0x35 && s->firmware_major<8)) return false;
+    if (id==DONGLE_SETTING_HOLD_ACTIONS && s->profile && !s->profile->listening &&
+        ((value&255)==DONGLE_SETTING_HOLD_ACTIONS_NOISE_CONTROL ||
+         ((value>>8)&255)==DONGLE_SETTING_HOLD_ACTIONS_NOISE_CONTROL)) return false;
+    if (id==DONGLE_SETTING_LISTENING_MODE &&
+        ((value==DONGLE_SETTING_LISTENING_MODE_ADAPTIVE && !adaptive) ||
+         (value==DONGLE_SETTING_LISTENING_MODE_OFF && !settings_allow_off(s)))) return false;
+    if (id==DONGLE_SETTING_HOLD_MODES &&
+        (((value&DONGLE_SETTING_HOLD_MODES_ADAPTIVE) && !adaptive) ||
+         ((value&DONGLE_SETTING_HOLD_MODES_OFF) && !settings_allow_off(s)))) return false;
+    if ((id==DONGLE_SETTING_ADAPTIVE_STRENGTH && !adaptive) ||
+        (id==DONGLE_SETTING_PAUSE_WHEN_ASLEEP && s->firmware_major<8)) return false;
     return s->reports[index].known || (s->profile && setting_explicit_choice(id)) ||
-        (id==0x34 && s->profile && s->profile->silent_allow_off);
+        (id==DONGLE_SETTING_ALLOW_OFF && s->profile && s->profile->silent_allow_off);
 }
 static inline uint16_t settings_snapshot(const dongle_settings_t *s, uint32_t now,
                                          uint8_t *out, uint16_t capacity, bool extended) {
     unsigned limit=extended ? DONGLE_SETTING_COUNT : DONGLE_LEGACY_SETTING_COUNT;
     unsigned count=0;
     for (unsigned i=0;i<limit;++i) if (s->reports[i].known) ++count;
-    if (!out || capacity<2+count*13) return 0;
-    out[0]=1; out[1]=(uint8_t)count;
-    unsigned offset=2;
+    if (!out || capacity<DONGLE_SETTINGS_SNAPSHOT_HEADER_SIZE+count*DONGLE_SETTINGS_SNAPSHOT_RECORD_SIZE) return 0;
+    out[0]=DONGLE_SETTINGS_SNAPSHOT_VERSION; out[1]=(uint8_t)count;
+    unsigned offset=DONGLE_SETTINGS_SNAPSHOT_HEADER_SIZE;
     for (unsigned i=0;i<limit;++i) {
         const setting_report_t *r=&s->reports[i];
         if (!r->known) continue;
-        out[offset]=setting_ids[i];
-        dongle_put32(out+offset+1,now-r->updated);
-        dongle_put32(out+offset+5,r->revision);
-        dongle_put32(out+offset+9,r->value);
-        offset+=13;
+        out[offset+DONGLE_SETTINGS_RECORD_ID_OFFSET]=setting_ids[i];
+        dongle_put32(out+offset+DONGLE_SETTINGS_RECORD_AGE_MS_OFFSET,now-r->updated);
+        dongle_put32(out+offset+DONGLE_SETTINGS_RECORD_REVISION_OFFSET,r->revision);
+        dongle_put32(out+offset+DONGLE_SETTINGS_RECORD_VALUE_OFFSET,r->value);
+        offset+=DONGLE_SETTINGS_SNAPSHOT_RECORD_SIZE;
     }
     return (uint16_t)offset;
 }

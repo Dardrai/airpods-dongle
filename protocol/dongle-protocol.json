@@ -314,6 +314,7 @@
     {"models": [3157], "controls": ["ear_detection", "listening_mode"], "listening": true, "adaptive": false, "allow_off_option": false, "silent_allow_off": false}
   ],
   "profile_model_slots": 3,
+  "case_battery_profile_model": 3063,
   "aacp": {
     "header": [4, 0, 4, 0],
     "opcodes": [

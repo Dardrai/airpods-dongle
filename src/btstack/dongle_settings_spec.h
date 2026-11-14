@@ -57,4 +57,6 @@ static const setting_profile_t setting_profiles[] = {
     {{3454,0,0},0x0029d746,true,true,false,false},
     {{3157,0,0},0x00000006,true,false,false,false},
 };
+// Case BLE battery keys are used only for the profile whose first model is this.
+#define DONGLE_CASE_BATTERY_PROFILE_MODEL 3063
 #endif

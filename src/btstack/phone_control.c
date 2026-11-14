@@ -16,7 +16,7 @@ static bd_addr_t peer;
 static uint16_t cid, frame_mtu;
 static bool connected, send_requested;
 static uint32_t received_at, blocked_at, connecting_at;
-typedef struct { uint8_t bytes[72], length, sent; } response_t;
+typedef struct { uint8_t bytes[DONGLE_PHONE_FRAME_MAX], length, sent; } response_t;
 static response_t responses[RESPONSE_COUNT];
 static unsigned response_head,response_count;
 static response_t requests[RESPONSE_COUNT];
@@ -44,27 +44,37 @@ static bool queue_request(void *context,const uint8_t *frame) {
     (void)context;
     if(!connected || request_count==RESPONSE_COUNT)return false;
     response_t *r=&requests[(request_head+request_count)%RESPONSE_COUNT];
-    r->length=(uint8_t)(8+frame[7]);memcpy(r->bytes,frame,r->length);++request_count;
+    r->length=(uint8_t)(DONGLE_PHONE_HEADER_SIZE+frame[DONGLE_PHONE_LENGTH_OFFSET]);
+    memcpy(r->bytes,frame,r->length);++request_count;
     return true;
 }
 static bool request(void *context,const uint8_t *frame) {
     (void)context;
     if(!connected || !bt_hci_phone_peer_connected(peer) || response_count==RESPONSE_COUNT)return false;
     response_t *r=&responses[(response_head+response_count)%RESPONSE_COUNT];
-    memset(r,0,sizeof(*r));memcpy(r->bytes,"APDG",4);r->bytes[4]=1;
-    r->bytes[5]=(uint8_t)(frame[5]|0x80);r->bytes[6]=frame[6];r->bytes[7]=64;r->length=72;
+    uint8_t operation=frame[DONGLE_PHONE_OPERATION_OFFSET], report=frame[DONGLE_PHONE_REPORT_ID_OFFSET];
+    memset(r,0,sizeof(*r));memcpy(r->bytes+DONGLE_PHONE_MAGIC_OFFSET,DONGLE_MAGIC,DONGLE_MAGIC_SIZE);
+    r->bytes[DONGLE_PHONE_VERSION_OFFSET]=DONGLE_PROTOCOL_VERSION;
+    r->bytes[DONGLE_PHONE_OPERATION_OFFSET]=(uint8_t)(operation|DONGLE_PHONE_RESPONSE_FLAG);
+    r->bytes[DONGLE_PHONE_REPORT_ID_OFFSET]=report;r->bytes[DONGLE_PHONE_LENGTH_OFFSET]=DONGLE_REPORT_SIZE;
+    r->length=DONGLE_PHONE_HEADER_SIZE+DONGLE_REPORT_SIZE;
+    const uint8_t *payload=frame+DONGLE_PHONE_HEADER_SIZE;
+    uint8_t *out=r->bytes+DONGLE_PHONE_HEADER_SIZE;
     uint8_t error=0;
-    if(frame[5]==2){
-        bool accepted=frame[6]==2 ? dongle_control_client_set(DONGLE_CLIENT_PHONE,frame+8) :
-            dongle_rpc_client_set(DONGLE_CLIENT_PHONE,frame+8);
-        if(!accepted)error=2;
+    if(operation==DONGLE_PHONE_OP_WRITE){
+        bool accepted=report==DONGLE_REPORT_ID ? dongle_control_client_set(DONGLE_CLIENT_PHONE,payload) :
+            dongle_rpc_client_set(DONGLE_CLIENT_PHONE,payload);
+        if(!accepted)error=DONGLE_PHONE_ERROR_BUSY;
     }
     if(!error){
-        bool available=frame[6]==2 ? dongle_control_client_get(DONGLE_CLIENT_PHONE,r->bytes+8) :
-            dongle_rpc_client_get(DONGLE_CLIENT_PHONE,r->bytes+8);
-        if(!available)error=3;
+        bool available=report==DONGLE_REPORT_ID ? dongle_control_client_get(DONGLE_CLIENT_PHONE,out) :
+            dongle_rpc_client_get(DONGLE_CLIENT_PHONE,out);
+        if(!available)error=DONGLE_PHONE_ERROR_UNAVAILABLE;
     }
-    if(error){r->bytes[5]=0xff;r->bytes[7]=1;r->bytes[8]=error;r->length=9;}
+    if(error){
+        r->bytes[DONGLE_PHONE_OPERATION_OFFSET]=DONGLE_PHONE_ERROR_OPERATION;
+        r->bytes[DONGLE_PHONE_LENGTH_OFFSET]=1;out[0]=error;r->length=DONGLE_PHONE_HEADER_SIZE+1;
+    }
     if(!response_count)blocked_at=btstack_run_loop_get_time_ms();
     ++response_count;schedule_send();return true;
 }

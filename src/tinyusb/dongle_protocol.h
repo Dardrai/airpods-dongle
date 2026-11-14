@@ -4,11 +4,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include "dongle_protocol_spec.h"
 
-#define DONGLE_REPORT_ID 2
-#define DONGLE_REPORT_SIZE 64
-enum { DONGLE_ACCEPTED = 1, DONGLE_BUSY, DONGLE_STALE,
-       DONGLE_UNSUPPORTED, DONGLE_DISCONNECTED, DONGLE_MALFORMED, DONGLE_TRANSPORT };
+// Short names for the report-2 result codes used throughout the firmware.
+enum { DONGLE_ACCEPTED = DONGLE_RESULT_ACCEPTED, DONGLE_BUSY = DONGLE_RESULT_BUSY,
+       DONGLE_STALE = DONGLE_RESULT_STALE, DONGLE_UNSUPPORTED = DONGLE_RESULT_UNSUPPORTED,
+       DONGLE_DISCONNECTED = DONGLE_RESULT_DISCONNECTED, DONGLE_MALFORMED = DONGLE_RESULT_MALFORMED,
+       DONGLE_TRANSPORT = DONGLE_RESULT_TRANSPORT };
 static inline uint32_t dongle_u32(const uint8_t *p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
@@ -17,16 +19,32 @@ static inline void dongle_put32(uint8_t *p, uint32_t v) {
 }
 static inline void dongle_header(uint8_t *p) {
     memset(p, 0, DONGLE_REPORT_SIZE);
-    p[0] = DONGLE_REPORT_ID;
-    memcpy(p + 1, "APDG", 4); p[5] = 1; p[6] = DONGLE_REPORT_SIZE;
+    p[DONGLE_HEADER_REPORT_ID_OFFSET] = DONGLE_REPORT_ID;
+    memcpy(p + DONGLE_HEADER_MAGIC_OFFSET, DONGLE_MAGIC, DONGLE_MAGIC_SIZE);
+    p[DONGLE_HEADER_VERSION_OFFSET] = DONGLE_PROTOCOL_VERSION;
+    p[DONGLE_HEADER_LENGTH_OFFSET] = DONGLE_REPORT_SIZE;
 }
 static inline bool dongle_command_valid(const uint8_t *p, unsigned size) {
-    if (size != DONGLE_REPORT_SIZE || p[0] != DONGLE_REPORT_ID ||
-        memcmp(p + 1, "APDG", 4) || p[5] != 1 || p[6] != size ||
-        !dongle_u32(p + 18)) return false;
-    for (unsigned i = 23; i < size; ++i) if (p[i]) return false;
-    if (p[7] == 3) return p[22] == 2 || p[22] == 3;
-    return p[7] >= 1 && p[7] <= 4 && p[22] == 0;
+    if (size != DONGLE_REPORT_SIZE || p[DONGLE_HEADER_REPORT_ID_OFFSET] != DONGLE_REPORT_ID ||
+        memcmp(p + DONGLE_HEADER_MAGIC_OFFSET, DONGLE_MAGIC, DONGLE_MAGIC_SIZE) ||
+        p[DONGLE_HEADER_VERSION_OFFSET] != DONGLE_PROTOCOL_VERSION || p[DONGLE_HEADER_LENGTH_OFFSET] != size ||
+        !dongle_u32(p + DONGLE_CMD_SEQUENCE_OFFSET)) return false;
+    for (unsigned i = DONGLE_CMD_RESERVED_OFFSET; i < size; ++i) if (p[i]) return false;
+    uint8_t opcode = p[DONGLE_CMD_OPCODE_OFFSET], argument = p[DONGLE_CMD_ARGUMENT_OFFSET];
+    if (opcode == DONGLE_OP_LISTENING_MODE)
+        return argument == DONGLE_LISTENING_ANC || argument == DONGLE_LISTENING_TRANSPARENCY;
+    return opcode >= DONGLE_OP_RECONNECT && opcode <= DONGLE_OP_PHONE_PAIRING && argument == 0;
+}
+// Report-3 request header: fixed framing, zero phase, bounded payload, zero padding.
+static inline bool dongle_rpc_header_valid(const uint8_t *p) {
+    if (p[DONGLE_HEADER_REPORT_ID_OFFSET] != DONGLE_RPC_REPORT_ID ||
+        memcmp(p + DONGLE_HEADER_MAGIC_OFFSET, DONGLE_MAGIC, DONGLE_MAGIC_SIZE) ||
+        p[DONGLE_HEADER_VERSION_OFFSET] != DONGLE_PROTOCOL_VERSION ||
+        p[DONGLE_HEADER_LENGTH_OFFSET] != DONGLE_REPORT_SIZE ||
+        p[DONGLE_RPC_LENGTH_OFFSET] > DONGLE_RPC_CHUNK || p[DONGLE_RPC_PHASE_OFFSET]) return false;
+    for (unsigned i = DONGLE_RPC_PAYLOAD_OFFSET + p[DONGLE_RPC_LENGTH_OFFSET]; i < DONGLE_REPORT_SIZE; i++)
+        if (p[i]) return false;
+    return true;
 }
 
 // Each component retains its own age; omitted slots are not refreshed.
@@ -37,36 +55,46 @@ typedef struct {
 } dongle_readback_t;
 static inline void dongle_readback_clear(dongle_readback_t *s) {
     memset(s, 0, sizeof(*s));
-    memset(s->battery, 255, sizeof(s->battery));
+    memset(s->battery, DONGLE_BATTERY_UNKNOWN, sizeof(s->battery));
 }
 static inline uint32_t dongle_age_ms(uint64_t now, uint64_t updated) {
     uint64_t age=now-updated;
-    // UINT32_MAX means unknown; known old observations must not wrap to fresh.
-    return age>=UINT32_MAX ? UINT32_MAX-1u : (uint32_t)age;
+    // DONGLE_AGE_UNKNOWN means unknown; known old observations must not wrap to fresh.
+    return age>=DONGLE_AGE_UNKNOWN ? DONGLE_AGE_SATURATED : (uint32_t)age;
 }
 static inline uint32_t dongle_readback_age(const dongle_readback_t *s, unsigned slot,
                                          uint64_t now) {
-    return s->known[slot] ? dongle_age_ms(now,s->updated[slot]) : UINT32_MAX;
+    return s->known[slot] ? dongle_age_ms(now,s->updated[slot]) : DONGLE_AGE_UNKNOWN;
 }
 static inline void dongle_readback_packet(dongle_readback_t *s, const uint8_t *p,
                                          unsigned size, uint64_t now) {
-    static const uint8_t header[] = {4, 0, 4, 0};
-    if (size < 7 || memcmp(p, header, 4)) return;
-    if (size == 11 && p[4] == 9 && p[5] == 0 && p[6] == 0x0d &&
-        dongle_u32(p + 7) >= 1 && dongle_u32(p + 7) <= 4) s->anc = p[7];
-    if (p[4] != 4 || p[5] || !p[6] || size < 7u + p[6] * 5u) return;
+    if (size < 7 || memcmp(p, AACP_HEADER, AACP_HEADER_SIZE)) return;
+    if (size == AACP_CONTROL_PACKET_SIZE && p[AACP_OPCODE_OFFSET] == AACP_OP_CONTROL && p[5] == 0 &&
+        p[AACP_CONTROL_ID_OFFSET] == DONGLE_SETTING_LISTENING_MODE &&
+        dongle_u32(p + AACP_CONTROL_VALUE_OFFSET) >= DONGLE_LISTENING_OFF &&
+        dongle_u32(p + AACP_CONTROL_VALUE_OFFSET) <= DONGLE_LISTENING_ADAPTIVE)
+        s->anc = p[AACP_CONTROL_VALUE_OFFSET];
+    const uint8_t count = p[AACP_BATTERY_COUNT_OFFSET];
+    if (p[AACP_OPCODE_OFFSET] != AACP_OP_BATTERY || p[5] || !count ||
+        size < AACP_BATTERY_ENTRIES_OFFSET + count * AACP_BATTERY_ENTRY_SIZE) return;
     // Validate the entire battery report before changing any slot.
-    for (unsigned i = 0; i < p[6]; ++i) {
-        uint8_t level = p[7 + i * 5 + 2];
-        if (level > 100 && level != 255) return;
+    for (unsigned i = 0; i < count; ++i) {
+        uint8_t level = p[AACP_BATTERY_ENTRIES_OFFSET + i * AACP_BATTERY_ENTRY_SIZE + AACP_BATTERY_LEVEL_OFFSET];
+        if (level > 100 && level != AACP_BATTERY_LEVEL_UNKNOWN) return;
     }
-    for (unsigned i = 0; i < p[6]; ++i) {
-        const uint8_t *b = p + 7 + i * 5;
-        int slot = b[0] == 4 ? 0 : b[0] == 2 ? 1 : b[0] == 8 ? 2 : -1;
+    for (unsigned i = 0; i < count; ++i) {
+        const uint8_t *b = p + AACP_BATTERY_ENTRIES_OFFSET + i * AACP_BATTERY_ENTRY_SIZE;
+        uint8_t component = b[AACP_BATTERY_COMPONENT_OFFSET], status = b[AACP_BATTERY_STATUS_OFFSET];
+        int slot = component == AACP_BATTERY_LEFT ? DONGLE_COMPONENT_LEFT :
+                   component == AACP_BATTERY_RIGHT ? DONGLE_COMPONENT_RIGHT :
+                   component == AACP_BATTERY_CASE ? DONGLE_COMPONENT_CASE : -1;
         if (slot < 0) continue;
-        s->battery[slot] = b[3] == 4 ? 255 : b[2];
+        s->battery[slot] = status == AACP_BATTERY_STATUS_DISCONNECTED ? DONGLE_BATTERY_UNKNOWN :
+                           b[AACP_BATTERY_LEVEL_OFFSET];
         s->charging &= (uint8_t)~(1u << slot);
-        if (s->battery[slot] <= 100 && (b[3] == 1 || b[3] == 5)) s->charging |= 1u << slot;
+        if (s->battery[slot] <= 100 && (status == AACP_BATTERY_STATUS_CHARGING ||
+                                        status == AACP_BATTERY_STATUS_OPTIMIZED_CHARGING))
+            s->charging |= 1u << slot;
         s->updated[slot] = now;
         s->known[slot] = true;
     }

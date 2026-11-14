@@ -215,6 +215,7 @@ enum {
 // AirPods AACP framing used by the setting, readback and cache paths.
 #define AACP_HEADER "\x04""\x00""\x04""\x00"
 #define AACP_HEADER_SIZE 4u
+#define AACP_HEADER_BYTES 0x04,0x00,0x04,0x00
 #define AACP_OPCODE_OFFSET 4
 #define AACP_OP_CAPABILITIES 0x02
 #define AACP_OP_BATTERY 0x04

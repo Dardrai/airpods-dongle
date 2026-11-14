@@ -58,6 +58,8 @@ def check_spec(spec):
         unknown = set(profile["controls"]) - names
         if unknown:
             raise ValueError(f"unknown profile controls: {sorted(unknown)}")
+    if spec["case_battery_profile_model"] not in [p["models"][0] for p in spec["profiles"]]:
+        raise ValueError("case_battery_profile_model must be the first model of a profile")
     for group in (spec["control"]["results"], spec["rpc"]["errors"], spec["features"],
                   spec["rpc"]["operations"], spec["control"]["command"]["opcodes"]):
         values = [item["value"] for item in group]
@@ -193,6 +195,7 @@ def c_header(spec):
             "// AirPods AACP framing used by the setting, readback and cache paths.",
             f"#define AACP_HEADER {c_string(aacp['header'])}",
             f"#define AACP_HEADER_SIZE {len(aacp['header'])}u",
+            "#define AACP_HEADER_BYTES " + ",".join(f"0x{b:02x}" for b in aacp["header"]),
             f"#define AACP_OPCODE_OFFSET {aacp['opcode_offset']}",
             *c_defines("AACP_OP_", aacp["opcodes"], "0x{:02x}"),
             f"#define AACP_CONTROL_HEADER {c_string(aacp['header'] + [by_name(aacp['opcodes'])['control']['value'], 0])}",
@@ -278,7 +281,10 @@ def c_settings(spec):
         models = ",".join(str(m) for m in p["models"] + [0] * (slots - len(p["models"])))
         bools = ",".join("true" if p[f] else "false" for f in flags)
         out.append(f"    {{{{{models}}},0x{profile_mask(spec, p):08x},{bools}}},")
-    out += ["};", "#endif", ""]
+    out += ["};",
+            "// Case BLE battery keys are used only for the profile whose first model is this.",
+            f"#define DONGLE_CASE_BATTERY_PROFILE_MODEL {spec['case_battery_profile_model']}",
+            "#endif", ""]
     return "\n".join(out)
 
 
