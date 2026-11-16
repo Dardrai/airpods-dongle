@@ -923,6 +923,103 @@ static void game_transition_stale_snapshot(void) {
     waveform_fixture=false;
 }
 
+static unsigned prepare_service_calls,prepare_invalidation_kind,prepare_fresh_clock;
+static bool prepare_invalidate_after_snapshot;
+static uint32_t prepare_changed_read,prepare_changed_used;
+static uint32_t prepare_changed_credit,prepare_changed_remainder,prepare_changed_time,prepare_changed_timeout;
+static uint64_t prepare_changed_debt;
+static void service_during_tempo_prepare(void) {
+    assert(!pcm_locked);
+    if(!encoder_tempo_job.future)return;
+    if(prepare_invalidate_after_snapshot && !encoder_job.tempo)return;
+    ++prepare_service_calls;
+    pcm_lock_hook=NULL;
+    if(prepare_invalidation_kind==0)ingress(48);
+    else if(prepare_invalidation_kind==1)playback_pcm_discontinuity(&playback_pcm);
+    else if(prepare_invalidation_kind==2)assert(playback_pcm_consume(&playback_pcm,48));
+    else if(prepare_invalidation_kind==3)++usb_playback_revision;
+    else if(prepare_invalidation_kind==4)++playback_pcm.fraction;
+    else if(prepare_invalidation_kind==5)playback_pcm.valid_past=encoder_tempo_job.valid_past-1;
+    else if(prepare_invalidation_kind==6)playback_pcm.used=encoder_tempo_job.future-1;
+    else if(prepare_invalidation_kind==7)++control_session;
+    else if(prepare_invalidation_kind==8)playback_encoder_invalidate();
+    else if(prepare_invalidation_kind==9)audio_owned=false;
+    else if(prepare_invalidation_kind==10)handleAAC=(void *)2;
+    else if(prepare_invalidation_kind==11)cur_codec=2;
+    else if(prepare_invalidation_kind==12)is_usb_streaming=false;
+    if(prepare_invalidation_kind) {
+        // A replacement source owns its clock; a canceled old preparation must not charge it.
+        playback_adjust_cancel(&playback_adjust);
+        media_tracker.samples_ready=prepare_fresh_clock==1?713u:0;
+        media_tracker.acc_num_missed_samples=prepare_fresh_clock==1?37000u:0;
+        media_tracker.sample_debt=prepare_fresh_clock==2?111u*99000u+17u:0;
+        media_tracker.time_audio_data_sent=now-7u;
+        media_tracker.audio_timer.timeout=now+51u+prepare_fresh_clock;
+    }
+    prepare_changed_read=playback_pcm.read;prepare_changed_used=playback_pcm.used;
+    prepare_changed_credit=media_tracker.samples_ready;
+    prepare_changed_remainder=media_tracker.acc_num_missed_samples;
+    prepare_changed_debt=media_tracker.sample_debt;
+    prepare_changed_time=media_tracker.time_audio_data_sent;
+    prepare_changed_timeout=media_tracker.audio_timer.timeout;
+    if(!prepare_invalidation_kind)pcm_lock_hook=service_during_tempo_prepare;
+}
+static void game_transition_prepare_services_usb_and_fences_source(void) {
+    for(unsigned boundary=0;boundary<2;++boundary)
+    for(prepare_fresh_clock=0;prepare_fresh_clock<3;++prepare_fresh_clock)
+    for(prepare_invalidation_kind=0;prepare_invalidation_kind<=12;++prepare_invalidation_kind) {
+        if(boundary && prepare_invalidation_kind!=3)continue;
+        prepare_invalidate_after_snapshot=boundary!=0;
+        waveform_start(40,997,false,true);
+        dongle_playback_encode_complete();
+        if(send_requested) {send_requested=false;a2dp_demo_send_media_packet();}
+        playback_adjust_request(&playback_adjust,1500,60);
+        playback_adjust_start(&playback_adjust,now);
+        media_tracker.samples_ready=480;
+        encoder_tempo_job=(playback_tempo_job_t){0};
+        uint32_t original_read=playback_pcm.read,original_used=playback_pcm.used;
+        unsigned previous_calls=encode_calls;
+        unsigned previous_units=playback_metrics.encoded_units;
+        uint32_t previous_rtp=media_tracker.rtp_timestamp;
+        uint32_t previous_jobs=playback_work_metrics.aac_jobs;
+        playback_inspect_t previous_inspect=playback_inspect;
+        inspect_enabled=prepare_invalidation_kind!=0;
+        prepare_service_calls=0;pcm_lock_hook=service_during_tempo_prepare;
+        assert(fill_aac_audio_buffer(&media_tracker)==(prepare_invalidation_kind?0:480));
+        inspect_enabled=false;
+        pcm_lock_hook=NULL;
+        assert(!pcm_locked && prepare_service_calls>0);
+        if(!prepare_invalidation_kind) {
+            assert(prepare_service_calls>=23 && encoder_job.tempo);
+            assert(playback_pcm.read==original_read && playback_pcm.used==original_used+48*prepare_service_calls);
+            // Every injected USB packet was accepted before this job consumed any input.
+            assert(!playback_metrics.pcm_drops && !playback_metrics.pcm_underflows);
+        } else {
+            assert(prepare_service_calls==1 && !encoder_job.tempo && !playback_adjust_busy(&playback_adjust));
+            assert(playback_pcm.read==prepare_changed_read && playback_pcm.used==prepare_changed_used);
+            assert(!encoder_tempo_job.searched && !encoder_tempo_job.chosen && !encoder_tempo_job.rendered);
+            assert(atomic_load(&encoder_job.state)==ENCODE_IDLE);
+            assert(media_tracker.samples_ready==prepare_changed_credit &&
+                media_tracker.acc_num_missed_samples==prepare_changed_remainder &&
+                media_tracker.sample_debt==prepare_changed_debt &&
+                media_tracker.time_audio_data_sent==prepare_changed_time &&
+                media_tracker.audio_timer.timeout==prepare_changed_timeout);
+            assert(!memcmp(&playback_inspect,&previous_inspect,sizeof previous_inspect));
+            assert(media_tracker.rtp_timestamp==previous_rtp && playback_metrics.encoded_units==previous_units);
+        }
+        bt_locked=false;dongle_playback_encode_run();bt_locked=true;
+        dongle_playback_encode_complete();
+        if(prepare_invalidation_kind) {
+            assert(encode_calls==previous_calls);
+            assert(playback_pcm.read==prepare_changed_read && playback_pcm.used==prepare_changed_used);
+            assert(!media_tracker.codec_storage_count && !media_tracker.codec_num_frames);
+            assert(playback_work_metrics.aac_jobs==previous_jobs);
+        } else assert(encode_calls==previous_calls+1);
+    }
+    waveform_fixture=false;
+    puts("Tempo preparation: USB service between chunks; epoch, scope, cursor, fraction, history and future fences preserve input");
+}
+
 static void game_transition_measured_pressure(void) {
     for(unsigned encoder_fraction=0;encoder_fraction<=30;encoder_fraction+=30) {
         waveform_start(40,997,false,true);
@@ -1019,6 +1116,7 @@ int main(void) {
     game_transition_retains_float_precision();
     game_transition_cpu_budget();
     game_transition_stale_snapshot();
+    game_transition_prepare_services_usb_and_fences_source();
     game_transition_ingress_debt();
     game_transition_measured_pressure();
     game_transition_insufficient_throughput();

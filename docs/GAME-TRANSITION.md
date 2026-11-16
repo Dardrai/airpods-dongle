@@ -74,6 +74,23 @@ synthetic timings exclude the encoder, radio and normal interrupts. Listening
 acceptance remains pending; arithmetic equivalence and a lower CPU cost do not
 prove sufficient throughput for every signal or host.
 
+That first listening repeat still failed, adding 314 active dropped frames,
+88 zero-filled frames and two recoveries. The 0.1.69 candidate therefore splits
+preparation into bounded chunks, releasing PCM exclusion between groups of 256
+source positions so the USB timer can run. The previous preparation could mask
+interrupts for about 637 microseconds; USB servicing is scheduled every 500.
+The pinned USB device driver uses a single-buffered OUT endpoint, so a missed
+host transaction before its callback need not increment bad-packet counters.
+
+Every reacquisition validates the original encoder/source scope, cursor,
+fraction, generation, history and required future input. Invalidated work cannot
+consume replacement PCM or publish an encoder job. Post-read validation, clock
+debit and job publication are atomic under one short exclusion. An unowned
+route is rejected before reading PCM. These changes preserve the waveform math,
+existing static workspace, receiver targets, clock policy and volume handling.
+Real interrupt timing, USB-frame conservation and listening acceptance remain
+pending; host checkpoint tests establish service opportunities and fencing.
+
 `tools/test.py --sanitize` includes actual-production-path waveform tests for
 unequal and opposite-polarity stereo, deep bass through treble, low-level float
 precision, transitions, reversal/cancellation, retained-history races and USB

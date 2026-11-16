@@ -13,6 +13,7 @@
 #define PLAYBACK_TEMPO_SELECTED_FRAMES 1074u
 
 typedef const float *(*playback_tempo_reader_t)(void *,int32_t);
+typedef bool (*playback_tempo_checkpoint_t)(void *);
 typedef struct {uint32_t fraction;int16_t offset;bool active;float history[64];} playback_tempo_state_t;
 typedef struct {
   union {
@@ -46,9 +47,9 @@ static inline int playback_tempo_max_lag(const playback_tempo_job_t *job,int nom
     int maximum=(int)job->future-length-nominal;
     return maximum<PLAYBACK_TEMPO_MAX_LAG?maximum:PLAYBACK_TEMPO_MAX_LAG;
 }
-static inline bool playback_tempo_prepare(playback_tempo_work_t *work,playback_tempo_job_t *job,
+static inline bool playback_tempo_prepare_checkpointed(playback_tempo_work_t *work,playback_tempo_job_t *job,
     const playback_tempo_state_t *state,uint8_t interval,uint16_t consumed,uint32_t fraction,uint32_t valid_past,
-    uint32_t future,playback_tempo_reader_t read,void *context) {
+    uint32_t future,playback_tempo_reader_t read,void *context,playback_tempo_checkpoint_t checkpoint) {
     if(!work || !job || !state || !read || (interval!=9 && interval!=10 && interval!=11) ||
        (interval==10?consumed!=480:consumed<384 || consumed>528 || (consumed&1)) ||
        fraction>=655360u || valid_past<32 || valid_past>PLAYBACK_PCM_FRAMES ||
@@ -70,7 +71,7 @@ static inline bool playback_tempo_prepare(playback_tempo_work_t *work,playback_t
     }
     if(job->finish)return true;
     float peak=0;
-    for(int position=-(int)PLAYBACK_TEMPO_PAST;position<(int)job->future;position+=4)
+    for(int position=-(int)PLAYBACK_TEMPO_PAST;position<(int)job->future;position+=4) {
         for(unsigned pair=0;pair<2;++pair) {
             int p=position+(int)pair;
             if(p<-(int)job->valid_past || p>=(int)job->future)continue;
@@ -80,12 +81,17 @@ static inline bool playback_tempo_prepare(playback_tempo_work_t *work,playback_t
                 if(value>peak)peak=value;
             }
         }
+        // Bound IRQ exclusion well below the 500 us USB service interval.
+        if(checkpoint && ((unsigned)(position+(int)PLAYBACK_TEMPO_PAST+4)&255u)==0 &&
+           !checkpoint(context))return false;
+    }
+    if(checkpoint && !checkpoint(context))return false;
     int exponent=0;
     if(peak>0)frexpf(peak,&exponent);
     exponent=10-exponent;if(exponent>120)exponent=120;if(exponent< -120)exponent=-120;
     float gain=ldexpf(1.0f,exponent);
     // Keep adjacent full-rate samples, then skip two: pure 12 kHz is not invisible.
-    for(int position=-(int)PLAYBACK_TEMPO_PAST;position<(int)PLAYBACK_TEMPO_FUTURE;position+=4)
+    for(int position=-(int)PLAYBACK_TEMPO_PAST;position<(int)PLAYBACK_TEMPO_FUTURE;position+=4) {
         for(unsigned pair=0;pair<2;++pair) {
             int p=position+(int)pair;
             const float *stereo=p>=-(int)job->valid_past && p<(int)job->future?read(context,p):NULL;
@@ -97,7 +103,17 @@ static inline bool playback_tempo_prepare(playback_tempo_work_t *work,playback_t
                 work->analysis.samples[index]=(int16_t)value;
             }
         }
+        if(checkpoint && ((unsigned)(position+(int)PLAYBACK_TEMPO_PAST+4)&255u)==0 &&
+           !checkpoint(context))return false;
+    }
+    if(checkpoint && !checkpoint(context))return false;
     return true;
+}
+static inline bool playback_tempo_prepare(playback_tempo_work_t *work,playback_tempo_job_t *job,
+    const playback_tempo_state_t *state,uint8_t interval,uint16_t consumed,uint32_t fraction,uint32_t valid_past,
+    uint32_t future,playback_tempo_reader_t read,void *context) {
+    return playback_tempo_prepare_checkpointed(work,job,state,interval,consumed,fraction,valid_past,
+        future,read,context,NULL);
 }
 // Q10 correlation bounds each 120-term window below 2^28; only full prefixes need uint32.
 static inline int32_t playback_tempo_dot_pair(const int16_t *a,const int16_t *b,int32_t sum) {

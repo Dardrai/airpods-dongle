@@ -89,7 +89,8 @@ static void cancellation_fences_every_scope(void) {
     assert(!encode_calls && encoder_job.cancelled==1);
     initialize(4,480,324,10,986);is_usb_streaming=true;media_tracker.samples_ready=480;
     pcm_read_hook=invalidate_usb;
-    assert(fill_aac_audio_buffer(&media_tracker)==480);
+    assert(fill_aac_audio_buffer(&media_tracker)==0);
+    assert(media_tracker.samples_ready==480 && atomic_load(&encoder_job.state)==ENCODE_IDLE);
     run_unlocked();dongle_playback_encode_complete();
     assert(!encode_calls && !media_tracker.codec_num_frames && encoder_job.cancelled==1);
 }

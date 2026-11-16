@@ -15,6 +15,18 @@ static void packet(unsigned elapsed_ms) {
     media_tracker.samples_ready+=960;
     // This fixture injects the credited packet directly instead of running the source timer.
     media_tracker.time_audio_data_sent=now;
+    if(!audio_owned) {
+        uint32_t credit=media_tracker.samples_ready,remainder=media_tracker.acc_num_missed_samples;
+        uint64_t debt=media_tracker.sample_debt;
+        unsigned reads=consumed,source_reads=source_consumed,calls=encode_calls;
+        uint32_t rtp=media_tracker.rtp_timestamp;
+        assert(fill_aac_audio_buffer(&media_tracker)==0);
+        assert(media_tracker.samples_ready==credit && media_tracker.acc_num_missed_samples==remainder &&
+            media_tracker.sample_debt==debt && media_tracker.time_audio_data_sent==now);
+        assert(consumed==reads && source_consumed==source_reads && encode_calls==calls &&
+            media_tracker.rtp_timestamp==rtp && atomic_load(&encoder_job.state)==ENCODE_IDLE);
+        return; // An inactive owner yields; ready credit is not permission to send.
+    }
     drain();
 }
 static void cumulative_stalls_recover(void) {

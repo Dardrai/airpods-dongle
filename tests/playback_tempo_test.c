@@ -269,8 +269,69 @@ static void guards(void) {
     assert(!playback_tempo_prepare(&work,&job,&state,11,528,0,33,768,source_read,&source));
     assert(sizeof(work)<=sizeof(playback_resample_t));
 }
+static unsigned prepare_checkpoints,prepare_previous_reads,prepare_max_reads,prepare_reject_at;
+static bool prepare_checkpoint(void *context) {
+    source_t *source=context;
+    unsigned reads=source->reads-prepare_previous_reads;
+    if(reads>prepare_max_reads)prepare_max_reads=reads;
+    // 128 stereo reads per chunk, plus the first 32-frame history copy.
+    assert(reads<=160);
+    prepare_previous_reads=source->reads;
+    return ++prepare_checkpoints!=prepare_reject_at;
+}
+static void checkpointed_preparation_is_exact(void) {
+    static playback_tempo_work_t reference_work;
+    static playback_encoder_pcm_t reference_stage;
+    uint32_t seed=0x9ac64e21;
+    for(unsigned i=0;i<8192*2;++i) {
+        seed=seed*1664525u+1013904223u;
+        benchmark_source[i]=(float)((int32_t)(seed>>8)-0x800000)/16777216.0f;
+    }
+    for(unsigned phase=0;phase<2;++phase) {
+        source_t source={.past=PLAYBACK_TEMPO_PAST,.precomputed=true};
+        playback_tempo_state_t state={0},reference_state={0};
+        for(unsigned block=0;block<100;++block) {
+            unsigned interval=block%25==24?10:block%8<4?9:11;
+            unsigned consumed=interval==10?480:384+2*(block%73);
+            unsigned fraction=phase?634880:0;
+            source.future=consumed+240;source.reads=0;
+            source_t reference=source;
+            playback_tempo_job_t job,reference_job;
+            prepare_checkpoints=prepare_previous_reads=prepare_max_reads=prepare_reject_at=0;
+            assert(playback_tempo_prepare(&reference_work,&reference_job,&reference_state,(uint8_t)interval,
+                (uint16_t)consumed,fraction,source.past,source.future,source_read,&reference));
+            assert(playback_tempo_prepare_checkpointed(&work,&job,&state,(uint8_t)interval,
+                (uint16_t)consumed,fraction,source.past,source.future,source_read,&source,prepare_checkpoint));
+            assert(interval==10?!prepare_checkpoints:prepare_checkpoints>=23);
+            assert(!memcmp(work.analysis.samples,reference_work.analysis.samples,sizeof work.analysis.samples));
+            assert(!memcmp(work.history,reference_work.history,sizeof work.history));
+            playback_tempo_search(&work,&job);playback_tempo_search(&reference_work,&reference_job);
+            assert(playback_tempo_select(&work,&job,source_read,&source));
+            assert(playback_tempo_select(&reference_work,&reference_job,source_read,&reference));
+            playback_tempo_render_q31(&work,&job,&stage);
+            playback_tempo_render_q31(&reference_work,&reference_job,&reference_stage);
+            assert(!memcmp(stage.q31,reference_stage.q31,sizeof stage.q31));
+            assert(!memcmp(job.selected,reference_job.selected,sizeof job.selected));
+            playback_tempo_commit(&state,&job,&work);
+            playback_tempo_commit(&reference_state,&reference_job,&reference_work);
+            assert(!memcmp(&state,&reference_state,sizeof state));
+            source.position+=consumed;
+        }
+    }
+    for(unsigned reject=1;reject<=24;++reject) {
+        source_t source={.past=PLAYBACK_TEMPO_PAST,.future=768,.precomputed=true};
+        playback_tempo_state_t state={0},saved=state;
+        playback_tempo_job_t job;
+        prepare_checkpoints=prepare_previous_reads=prepare_max_reads=0;prepare_reject_at=reject;
+        assert(!playback_tempo_prepare_checkpointed(&work,&job,&state,11,528,634880,source.past,
+            source.future,source_read,&source,prepare_checkpoint));
+        assert(prepare_checkpoints==reject && !job.searched && !job.chosen && !job.rendered);
+        assert(!memcmp(&state,&saved,sizeof state) && source.position==0);
+    }
+    puts("Tempo checkpoints: bounded read chunks, exact lags/Q31/history, and immediate cancellation at every checkpoint");
+}
 int main(void) {
-    setbuf(stdout,NULL);guards();dc_precision();transition_arithmetic_is_unchanged();
+    setbuf(stdout,NULL);guards();dc_precision();transition_arithmetic_is_unchanged();checkpointed_preparation_is_exact();
     const double tones[]={20,40,80,100,1000,12000,16000,20000};
     for(unsigned interval=9;interval<=11;interval+=2)
         for(unsigned i=0;i<sizeof tones/sizeof *tones;++i)tone(tones[i],interval,0,0.25);

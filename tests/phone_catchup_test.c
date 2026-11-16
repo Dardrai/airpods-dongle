@@ -66,10 +66,24 @@ static void wrapped_backlog_and_other_input_limits(void) {
     playback_audio_work(now);
     assert(!media_tracker.streaming && suspend_recovery_pending && playback_pcm.used<=1440);
 }
+static void unowned_relay_does_not_consume_source_or_credit(void) {
+    relay_fixture(0);
+    audio_owned=false;media_tracker.samples_ready=960;
+    media_tracker.acc_num_missed_samples=37000;
+    uint32_t read=playback_pcm.read,used=playback_pcm.used,time=media_tracker.time_audio_data_sent;
+    for(unsigned poll=0;poll<5;++poll) {
+        assert(fill_aac_audio_buffer(&media_tracker)==0);
+        assert(playback_pcm.read==read && playback_pcm.used==used);
+        assert(media_tracker.samples_ready==960 && media_tracker.acc_num_missed_samples==37000 &&
+            !media_tracker.sample_debt && media_tracker.time_audio_data_sent==time);
+        assert(!encode_calls && !media_tracker.rtp_timestamp && atomic_load(&encoder_job.state)==ENCODE_IDLE);
+    }
+}
 int main(void) {
     recoverable_radio_waits_keep_source_and_receiver_time();
     actual_overflow_and_missing_data_still_recover();
     wrapped_backlog_and_other_input_limits();
+    unowned_relay_does_not_consume_source_or_credit();
     puts("phone catch-up: retained PCM/deadlines, live recovery poll, overflow, missing data, wrap and USB/call limits passed");
     return 0;
 }

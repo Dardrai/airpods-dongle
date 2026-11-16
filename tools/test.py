@@ -175,7 +175,8 @@ def playback_lifecycle_sources(directory):
         end = source.index("\n}", start) + 2
         functions.append(source[start:end])
     production_pcm = []
-    for signature in ["static const float *playback_tempo_source(", "static bool playback_encoder_tempo_run(",
+    for signature in ["static const float *playback_tempo_source(", "static bool playback_tempo_checkpoint(",
+                      "static bool playback_encoder_tempo_run(",
                       "static void playback_pcm_push_measured(", "static void audio_slot_push_data(",
                       "void audio_slot_push_samples(", "void audio_slot_push_float(",
                       "static void audio_pcm_read(", "static void playback_audio_work("]:
