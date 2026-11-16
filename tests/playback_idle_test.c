@@ -522,7 +522,7 @@ static void assert_control_only(unsigned expected_starts) {
     assert(!media_tracker.codec_storage_count && !media_tracker.codec_num_frames && !resets);
     assert(get_a2dp_connected_flag()); // Claim negotiation never removes the USB endpoint.
 }
-static void explicit_claim_waits_for_real_owner_and_buffer(void) {
+static void explicit_claim_waits_for_real_owner(void) {
     for(unsigned game=0;game<2;++game)for(unsigned owner_before_ack=0;owner_before_ack<2;++owner_before_ack) {
         explicit_claim_fixture();
         uint32_t read=playback_pcm.read,used=playback_pcm.used;
@@ -548,13 +548,12 @@ static void explicit_claim_waits_for_real_owner_and_buffer(void) {
         }
         game_eligible=true;
         playback_game=(playback_game_t){.requested=game!=0,.phase=game?GAME_PENDING:GAME_OFF};
-        playback_idle_poll(++now);assert_control_only(1); // A real owner still needs normal preparation.
-        if(game)playback_game.phase=GAME_CONFIRMED;
-        else playback_game.target=150;
+        // An accepted control Start with real ownership can produce the PCM needed for buffer proof.
         playback_idle_poll(++now);
         assert(starts==1 && resets==1 && media_tracker.streaming && is_streaming);
         assert(media_tracker.audio_timer.active && playback_idle_phase==PLAYBACK_RUNNING && !playback_claim.active);
         assert(!claim_cancels); // Starting a genuinely owned pipeline does not retire that ownership.
+        assert(playback_game.phase==(game?GAME_PENDING:GAME_OFF)); // Starting is not a timing receipt.
         assert(playback_pcm.used==used && playback_pcm.priming==PLAYBACK_PRIMING_FRAMES);
         for(unsigned i=0;i<10;++i)playback_idle_poll(++now);
         assert(starts==1 && resets==1 && !suspends && !closes);
@@ -697,7 +696,7 @@ static void claim_ownership_loss_suspends_without_pcm(void) {
         explicit_claim_fixture();playback_idle_poll(now);accept(AVDTP_SI_START,5);
         if(positive) {
             audio_owned=true;claim_pending=false;dongle_playback_ownership_changed(true);
-            game_eligible=true;playback_idle_poll(++now); // Normal buffer proof is still absent.
+            game_eligible=true; // Ownership can be lost again before the next idle-policy pass.
             assert(playback_idle_phase==PLAYBACK_CLAIMING);
         }
         audio_owned=false;claim_pending=false;dongle_playback_ownership_changed(false);
@@ -711,7 +710,7 @@ static void claim_ownership_loss_suspends_without_pcm(void) {
 }
 
 int main(void) {
-    explicit_claim_waits_for_real_owner_and_buffer();
+    explicit_claim_waits_for_real_owner();
     explicit_claim_admission_does_not_spend_denied_intent();
     explicit_claim_keeps_original_deadline_and_attempt();
     explicit_claim_cleans_invalid_ack_and_wait();

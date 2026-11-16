@@ -223,8 +223,12 @@ revive the retired request without a fresh explicit intent.
 For AAC-ELD, that explicit request can negotiate one AVDTP Start before ownership
 is confirmed. The Mac capture orders Start/Accept before the local media-source
 report. The dongle holds an accepted Start without encoding PCM or running media
-timers; positive ownership then follows the existing buffer preparation and starts
-the pipeline without another Start. The attempt retains the original three-second
+timers; positive ownership then starts fresh normal media without another Start.
+Fresh Game Mode buffer negotiation waits for the existing media warmup instead
+of waiting for a pre-media delay proof. No buffer transaction is initiated while
+the control-Start attempt is active, including ownership arriving before its ACK.
+Ordinary suspended-stream and microphone restoration gates remain unchanged.
+The attempt retains the original three-second
 transition deadline within the ten-second request and is bound to its peer,
 control session and request revision. Cancellation, a newer remote request or
 scope loss suspends it; a peer Suspend does not automatically retry the same

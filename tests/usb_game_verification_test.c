@@ -12,7 +12,7 @@ static bool defer_send,admission_busy;
 static unsigned admission_attempts;
 static bool low_latency_flush;
 static bool playback_release_pending;
-// This focused USB suite never initiates handover; its full lifecycle is tested separately.
+// Releasing the transport is tested by the separate lifecycle suite.
 static void playback_release_close(void) {assert(false);}
 static void bt_hci_airpods_flush_timeout(bool enabled) {low_latency_flush=enabled;}
 static void verification_test_buffer_cancel(void) {queued_target=0;}
@@ -70,6 +70,74 @@ static void prime_with_real_packet_receipts(void) {
         production_game_poll();
         assert(playback_pcm_warm()==(block==9));
         if(block<9)assert(request_count==before);
+    }
+}
+static void claim_game_fixture(bool requested) {
+    reset_test();a2dp_demo_timer_stop(&media_tracker);
+    audio_owned=false;claim_known=claim_pending=true;claim_stage=3;
+    set_usb_streaming(true);
+    playback_game=(playback_game_t){.requested=requested,.phase=requested?GAME_PENDING:GAME_OFF};
+    production_game_poll();
+    assert_control_only(1);
+    assert(playback_claim.active && playback_idle_phase==PLAYBACK_STARTING && !request_count);
+}
+static void claimed_start_proves_buffer_only_after_media(void) {
+    for(unsigned game=0;game<2;++game)for(unsigned owner_before_ack=0;owner_before_ack<2;++owner_before_ack) {
+        claim_game_fixture(game!=0);
+        if(owner_before_ack) {
+            audio_owned=true;claim_pending=false;dongle_playback_ownership_changed(true);
+        }
+        // Ownership can arrive before the Start ACK. Neither ordering authorizes
+        // receiver-buffer commands while this control-only attempt is pending.
+        now+=600;production_game_poll();assert_control_only(1);assert(!request_count);
+        accept(AVDTP_SI_START,5);
+        assert(playback_idle_phase==PLAYBACK_CLAIMING);
+        if(!owner_before_ack) {
+            ++now;production_game_poll();assert_control_only(1);assert(!request_count);
+            audio_owned=true;claim_pending=false;dongle_playback_ownership_changed(true);
+        }
+        ++now;production_game_poll();
+        assert(starts==1 && resets==1 && media_tracker.streaming && !playback_claim.active);
+        assert(!request_count && !playback_game.waiting_report && !playback_game.failed);
+        assert(playback_pcm.priming==4800 && !playback_pcm_warm());
+        production_game_poll();assert(!request_count); // A timer alone is not RTP progress.
+        prime_with_real_packet_receipts();
+        if(game) {
+            assert(!request_count);now+=500;production_game_poll();
+            assert(requests_60==1 && !requests_150);
+        } else assert(requests_150==1 && !requests_60);
+        assert(playback_game.waiting_report && !playback_game.failed);
+        uint32_t sent=playback_game.sent_since;
+        fresh_report(0); // The pre-media zero report never confirms or renews a command.
+        assert(playback_game.waiting_report && playback_game.sent_since==sent);
+        fresh_report(game?1380:1500);
+        assert(!playback_game.waiting_report && !playback_game.failed && !playback_game.restore_failed);
+        if(game) {
+            assert(playback_adjust.pending);
+            playback_adjust_start(&playback_adjust,now);now+=1000;
+            playback_adjust_sent(&playback_adjust,43200,now);
+            production_game_poll();
+            assert(playback_game.phase==GAME_CONFIRMED);
+        } else assert(playback_game.phase==GAME_OFF && !playback_game.changed);
+        assert(request_count==1 && starts==1 && !suspends && !closes);
+    }
+}
+static void claiming_defers_old_restoration_without_faking_receipt(void) {
+    for(unsigned target=60;target<=150;target+=90) {
+        claim_game_fixture(false);
+        // Real ownership loss clears this debt. Seed it explicitly to ensure
+        // the existing urgent restoration path cannot bypass control-Start.
+        playback_game=(playback_game_t){.changed=true,.target=(uint16_t)target,.phase=GAME_RESTORING};
+        audio_owned=true;claim_pending=false;dongle_playback_ownership_changed(true);
+        now+=600;production_game_poll();assert_control_only(1);assert(!request_count);
+        accept(AVDTP_SI_START,5);production_game_poll();
+        assert(media_tracker.streaming && !playback_claim.active && starts==1 && !request_count);
+        assert(playback_game.changed && !playback_game.waiting_report);
+        // Once the normal pipeline is started, ordinary urgent restoration is
+        // unchanged; it still requires a real fresh report to clear the debt.
+        production_game_poll();assert(requests_150==1 && playback_game.waiting_report);
+        fresh_report(0);assert(playback_game.changed && playback_game.waiting_report);
+        fresh_report(1500);assert(!playback_game.changed && playback_game.phase==GAME_OFF);
     }
 }
 static void post_prime_verification_uses_fresh_send_and_report(void) {
@@ -173,6 +241,8 @@ static void cancellation_and_missing_receipts_are_bounded(void) {
     now+=2000;production_game_poll();now+=5000;production_game_poll();assert(requests_60==2 && requests_150<=1);
 }
 int main(void) {
+    claimed_start_proves_buffer_only_after_media();
+    claiming_defers_old_restoration_without_faking_receipt();
     post_prime_verification_uses_fresh_send_and_report();
     manual_live_on_already_uses_live_adjustment();
     start_ack_before_pre_live_report_still_verifies();

@@ -7,6 +7,7 @@
 #include "../src/btstack/playback_continuity.h"
 static playback_continuity_t phone_continuity;
 static playback_adjust_t playback_adjust;
+static struct {bool active;} playback_claim;
 static playback_usb_verification_t usb_game_verification;
 static void playback_usb_verify_cancel(void) {memset(&usb_game_verification,0,sizeof(usb_game_verification));}
 static bool playback_usb_verify_poll(uint32_t time) {(void)time;return false;}

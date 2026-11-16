@@ -2008,7 +2008,7 @@ static void playback_idle_poll(uint32_t now) {
     bool claimed = playback_idle_phase == PLAYBACK_CLAIMING;
     if (playback_idle_phase == PLAYBACK_SUSPENDED || claimed) {
         if (!wanted) return;
-        if (playback_game_eligible() && !aacp_mic_requested() && !aacp_mic_active() && !playback_game.failed) {
+        if (!claimed && playback_game_eligible() && !aacp_mic_requested() && !aacp_mic_active() && !playback_game.failed) {
             if (playback_game.requested && playback_game.phase != GAME_CONFIRMED) return;
             if (!playback_game.requested && (playback_game.target != 150 || playback_game.changed ||
                 playback_game.waiting_tx || playback_game.waiting_report)) return;
@@ -2960,6 +2960,7 @@ void dongle_playback_poll(void) {
         playback_game_session_lost(&playback_game); game_session=session;
     }
     // USB/Game Mode receive-buffer policy; suspended preparation remains unchanged.
+    bool claiming=playback_claim.active;
     bool live=!playback_released && is_usb_streaming && !phone_active && !call_active && media_tracker.streaming && playback_pcm_warm() &&
         playback_game_eligible() && aacp_control_ready() && !aacp_mic_requested() && !aacp_mic_active();
     if (!live) playback_adjust_cancel_stream(&media_tracker,now,playback_adjust_interval(&playback_adjust));
@@ -2976,9 +2977,9 @@ void dongle_playback_poll(void) {
         playback_adjust_request(&playback_adjust,reported_delay,playback_game.target);
     }
     // USB can adjust live; a phone source still prepares while suspended.
-    bool active=!playback_released && !aacp_mic_requested() && !aacp_mic_active() &&
+    bool active=!claiming && !playback_released && !aacp_mic_requested() && !aacp_mic_active() &&
         (!media_tracker.streaming || playback_game.changed || live);
-    bool available=!profile_pending && !a2dp_connect_pending &&
+    bool available=!claiming && !profile_pending && !a2dp_connect_pending &&
         aacp_control_ready() && aacp_audio_owned();
     uint16_t target=playback_game_step(&playback_game,available,playback_game_eligible(),active,now,delay_revision,reported_delay);
     bool verify_usb = playback_usb_verify_poll(now);
@@ -2988,7 +2989,7 @@ void dongle_playback_poll(void) {
         !aacp_mic_uplink_active() && !playback_game.changed &&
         !playback_game.waiting_tx && !playback_game.waiting_report && !playback_game.restore_failed &&
         (aacp_receive_buffer_serial()==mic_prepare_serial || aacp_receive_buffer_last()!=150)) target=150;
-    if (target) {
+    if (target && !claiming) {
         playback_continuity_reset(&phone_continuity);
         playback_adjust_cancel_stream(&media_tracker,now,playback_adjust_interval(&playback_adjust));
         playback_game_t previous=playback_game;
