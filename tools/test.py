@@ -211,6 +211,8 @@ def playback_lifecycle_sources(directory):
                       "static int playback_encoder_failed(",
                       "static void call_clock_init(",
                       "static bool a2dp_demo_timer_start(a2dp_media_sending_context_t * context){",
+                      "static bool playback_claim_transport_current(", "static bool playback_claim_current(",
+                      "static bool playback_claim_begin(", "static void playback_claim_suspend(",
                       "static void playback_idle_poll(", "void dongle_playback_ownership_changed(bool owned)",
                       "bool bridge_phone_open(void)", "void bridge_phone_start_requested(void)", "bool bridge_phone_ready(void)",
                       "static bool phone_output_recovery_owned(", "bool bridge_phone_recovering(void)",

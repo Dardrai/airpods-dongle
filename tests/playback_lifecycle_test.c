@@ -39,7 +39,7 @@ static uint8_t cur_codec, cur_capability;
 static uint32_t now, profile_since, game_session, delay_revision, actual_bitrate;
 static uint32_t reconnect_since, reconnect_delay = 1000;
 static uint16_t reported_delay;
-enum { PLAYBACK_RUNNING, PLAYBACK_SUSPENDING, PLAYBACK_SUSPENDED, PLAYBACK_STARTING };
+enum { PLAYBACK_RUNNING, PLAYBACK_SUSPENDING, PLAYBACK_SUSPENDED, PLAYBACK_STARTING, PLAYBACK_CLAIMING };
 static unsigned playback_idle_phase;
 static bool mic_prepare_open, mic_recovery_pending, mic_recovery_started;
 static uint32_t mic_prepare_serial, mic_prepare_session, mic_recovery_since, mic_recovery_revision;

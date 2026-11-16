@@ -255,8 +255,14 @@ static uint32_t reconnect_since, reconnect_delay = 1000;
 static playback_options_t profile_previous;
 static uint8_t profile_peer[6];
 static uint8_t game_peer[6];
-enum { PLAYBACK_RUNNING, PLAYBACK_SUSPENDING, PLAYBACK_SUSPENDED, PLAYBACK_STARTING };
+enum { PLAYBACK_RUNNING, PLAYBACK_SUSPENDING, PLAYBACK_SUSPENDED, PLAYBACK_STARTING, PLAYBACK_CLAIMING };
 static uint8_t playback_idle_phase;
+static struct {
+    uint32_t session, revision;
+    uint16_t cid;
+    uint8_t seid, peer[6];
+    bool active;
+} playback_claim;
 static bool playback_idle_counting;
 static bool playback_peer_suspended;
 static uint32_t usb_playback_revision, playback_peer_suspend_revision;
@@ -1063,6 +1069,7 @@ bool check_is_streaming(){
 }
 bool dongle_playback_transitioning(void) {
     return playback_idle_phase == PLAYBACK_SUSPENDING || playback_idle_phase == PLAYBACK_STARTING ||
+        playback_idle_phase == PLAYBACK_CLAIMING ||
         playback_adjust_busy(&playback_adjust);
 }
 
@@ -1895,12 +1902,89 @@ static void a2dp_demo_timer_stop(a2dp_media_sending_context_t * context){
 }
 
 static void playback_idle_reset(void) {
+    if (playback_claim.active && playback_claim.session == aacp_control_session() &&
+        playback_claim.revision == aacp_routing_state().revision &&
+        aacp_takeover_pending(playback_claim.peer)) aacp_routing_override();
     playback_idle_phase = PLAYBACK_RUNNING;
+    playback_claim.active = false; // Retain the attempted intent across peer Suspend.
     playback_idle_counting = false;
     playback_peer_suspended = false;
 }
 
+static bool playback_claim_transport_current(void) {
+    return a2dp_is_connected_flag && media_tracker.avdtp_cid == playback_claim.cid &&
+        media_tracker.local_seid == playback_claim.seid && sc.local_stream_endpoint &&
+        sc.local_stream_endpoint->l2cap_media_cid && !memcmp(cur_active_device, playback_claim.peer, 6);
+}
+
+static bool playback_claim_current(void) {
+    const uint8_t *peer = (const uint8_t *)get_device_addr();
+    aacp_routing_state_t state = aacp_routing_state();
+    return playback_claim.active && cur_codec == 4 && playback_claim_transport_current() && peer &&
+        !memcmp(peer, playback_claim.peer, 6) && finish_scan_avdtp_codec &&
+        playback_claim.session == aacp_control_session() && playback_claim.revision == state.revision &&
+        (state.flags & 1u) && aacp_control_ready() && !reconnect_auto_intent && !playback_released &&
+        !profile_pending && !a2dp_connect_pending && is_usb_streaming &&
+        !phone_opened && !phone_active && !call_opened && !call_active && !phone_call_active() &&
+        !usb_mic_requested() && !aacp_mic_requested() && !aacp_mic_active() &&
+        (aacp_audio_owned() || (aacp_takeover_pending(peer) && state.stage == 3));
+}
+
+static bool playback_claim_begin(uint32_t now) {
+    // shortcut: unowned Start is AAC-ELD only; extend after other codecs have capture/test coverage.
+    const uint8_t *peer = (const uint8_t *)get_device_addr();
+    aacp_routing_state_t state = aacp_routing_state();
+    uint32_t session = aacp_control_session();
+    if (cur_codec != 4 || aacp_audio_owned() || !peer || !peer_address_valid(peer) || !session ||
+        !aacp_takeover_pending(peer) || state.stage != 3 ||
+        (playback_claim.session == session && playback_claim.revision == state.revision) ||
+        (playback_idle_phase != PLAYBACK_SUSPENDED && playback_idle_phase != PLAYBACK_RUNNING) ||
+        media_tracker.streaming || !media_tracker.avdtp_cid || !media_tracker.local_seid) return false;
+    uint32_t previous_session = playback_claim.session, previous_revision = playback_claim.revision;
+    playback_claim.session = session; playback_claim.revision = state.revision;
+    playback_claim.cid = media_tracker.avdtp_cid; playback_claim.seid = media_tracker.local_seid;
+    memcpy(playback_claim.peer, peer, 6); playback_claim.active = true;
+    if (!playback_claim_current()) {
+        playback_claim.active = false;
+        playback_claim.session = previous_session; playback_claim.revision = previous_revision;
+        return false;
+    }
+    playback_peer_suspended = false;
+    playback_idle_phase = PLAYBACK_STARTING;
+    playback_idle_transition_since = now;
+    // Negotiate only: the buds can report their source after accepting Start.
+    if (avdtp_source_start_stream(media_tracker.avdtp_cid, media_tracker.local_seid) != ERROR_CODE_SUCCESS)
+        playback_encoder_failed(&media_tracker);
+    return true;
+}
+
+static void playback_claim_suspend(uint32_t now) {
+    bool current = playback_claim_transport_current();
+    if (!current) { playback_idle_reset(); return; }
+    a2dp_demo_timer_stop(&media_tracker);
+    playback_idle_phase = PLAYBACK_SUSPENDING;
+    playback_idle_transition_since = now;
+    if (avdtp_source_suspend(media_tracker.avdtp_cid, media_tracker.local_seid) != ERROR_CODE_SUCCESS)
+        playback_encoder_failed(&media_tracker);
+}
+
 static void playback_idle_poll(uint32_t now) {
+    if (playback_claim.active && !playback_claim_transport_current()) {
+        playback_idle_reset();
+        return;
+    }
+    if (playback_claim.active && playback_idle_phase == PLAYBACK_STARTING) {
+        if ((uint32_t)(now - playback_idle_transition_since) >= PLAYBACK_TRANSITION_MS)
+            playback_encoder_failed(&media_tracker);
+        return;
+    }
+    if (playback_idle_phase == PLAYBACK_CLAIMING) {
+        if (!playback_claim_current() || (uint32_t)(now - playback_idle_transition_since) >= PLAYBACK_TRANSITION_MS) {
+            playback_claim_suspend(now);
+            return;
+        }
+        if (!aacp_audio_owned()) return;
+    }
     if (!a2dp_is_connected_flag || !finish_scan_avdtp_codec || !media_tracker.local_seid ||
         profile_pending || a2dp_connect_pending) return;
     if (playback_idle_phase == PLAYBACK_SUSPENDING || playback_idle_phase == PLAYBACK_STARTING) {
@@ -1908,8 +1992,8 @@ static void playback_idle_poll(uint32_t now) {
             playback_encoder_failed(&media_tracker);
         return;
     }
-    if (!aacp_audio_owned()) return;
-    if (playback_peer_suspended && !media_tracker.streaming) {
+    if (!aacp_audio_owned()) { (void)playback_claim_begin(now); return; }
+    if (playback_peer_suspended && !media_tracker.streaming && playback_idle_phase != PLAYBACK_CLAIMING) {
         critical_section_enter_blocking(&playback_pcm_lock);
         bool restarted = is_usb_streaming && usb_playback_revision != playback_peer_suspend_revision;
         critical_section_exit(&playback_pcm_lock);
@@ -1921,7 +2005,8 @@ static void playback_idle_poll(uint32_t now) {
         }
     }
     bool wanted = is_usb_streaming || phone_opened || phone_active || call_opened || call_active || aacp_mic_requested() || aacp_mic_active();
-    if (playback_idle_phase == PLAYBACK_SUSPENDED) {
+    bool claimed = playback_idle_phase == PLAYBACK_CLAIMING;
+    if (playback_idle_phase == PLAYBACK_SUSPENDED || claimed) {
         if (!wanted) return;
         if (playback_game_eligible() && !aacp_mic_requested() && !aacp_mic_active() && !playback_game.failed) {
             if (playback_game.requested && playback_game.phase != GAME_CONFIRMED) return;
@@ -1929,10 +2014,15 @@ static void playback_idle_poll(uint32_t now) {
                 playback_game.waiting_tx || playback_game.waiting_report)) return;
         }
         playback_idle_phase = PLAYBACK_STARTING;
-        playback_idle_transition_since = now;
-        if ((cur_codec == 4 && !aaceld_encoder_init()) ||
-            avdtp_source_start_stream(media_tracker.avdtp_cid, media_tracker.local_seid) != ERROR_CODE_SUCCESS)
+        if (!claimed) playback_idle_transition_since = now;
+        if (cur_codec == 4 && !aaceld_encoder_init()) {
             playback_encoder_failed(&media_tracker);
+        } else if (claimed) {
+            is_streaming = a2dp_demo_timer_start(&media_tracker);
+            if (is_streaming) set_led_mode_on();
+        } else if (avdtp_source_start_stream(media_tracker.avdtp_cid, media_tracker.local_seid) != ERROR_CODE_SUCCESS) {
+            playback_encoder_failed(&media_tracker);
+        }
         return;
     }
     if (!media_tracker.streaming) return; // Do not reclaim an unsolicited peer suspension.
@@ -1967,6 +2057,7 @@ void dongle_playback_ownership_changed(bool owned) {
     uint8_t phase = playback_idle_phase;
     uint32_t transition_since = playback_idle_transition_since;
     bool running = media_tracker.streaming;
+    bool claiming = phase == PLAYBACK_CLAIMING && playback_claim_transport_current();
     if (running && !call_active && !phone_call_active() && !usb_mic_requested()) {
         if (is_usb_streaming) (void)usb_media_enqueue(USB_MEDIA_PAUSE_ONLY);
         else if (phone_active) phone_sink_pause_for_takeover();
@@ -1982,7 +2073,7 @@ void dongle_playback_ownership_changed(bool owned) {
         playback_idle_transition_since = transition_since;
         return;
     }
-    if (running && a2dp_is_connected_flag && media_tracker.local_seid) {
+    if ((running || claiming) && a2dp_is_connected_flag && media_tracker.local_seid) {
         playback_idle_phase = PLAYBACK_SUSPENDING;
         playback_idle_transition_since = btstack_run_loop_get_time_ms();
         if (avdtp_source_suspend(media_tracker.avdtp_cid, media_tracker.local_seid) != ERROR_CODE_SUCCESS)
@@ -2303,6 +2394,14 @@ static void signaling_command_accepted(uint8_t *packet, uint16_t size) {
         case  AVDTP_SI_START:
             if (encoder_job.deferred_size) break;
             if (avdtp_subevent_signaling_accept_get_local_seid(packet) != media_tracker.local_seid) break;
+            if (playback_claim.active) {
+                uint32_t now = btstack_run_loop_get_time_ms();
+                if (playback_idle_phase == PLAYBACK_STARTING && playback_claim_current() &&
+                    (uint32_t)(now - playback_idle_transition_since) < PLAYBACK_TRANSITION_MS)
+                    playback_idle_phase = PLAYBACK_CLAIMING;
+                else playback_claim_suspend(now);
+                break;
+            }
             if (profile_pending || a2dp_connect_pending || !finish_scan_avdtp_codec) break;
             if (!aacp_audio_owned()) {
                 a2dp_demo_timer_stop(&media_tracker);
@@ -2629,7 +2728,7 @@ uint8_t dongle_reconnect_policy(bool set, bool automatic, bool *current) {
             mic_prepare_open || mic_recovery_pending || phone_output_recovery || suspend_recovery_pending ||
             playback_game.waiting_tx || playback_game.waiting_report || playback_game.restore_failed ||
             playback_adjust_busy(&playback_adjust) || playback_idle_phase==PLAYBACK_SUSPENDING ||
-            playback_idle_phase==PLAYBACK_STARTING) return DONGLE_BUSY;
+            playback_idle_phase==PLAYBACK_STARTING || playback_idle_phase==PLAYBACK_CLAIMING) return DONGLE_BUSY;
         bool stored;
         bool readable=read_reconnect_policy(&stored);
         if (!readable || !write_reconnect_policy(automatic)) {
@@ -2770,7 +2869,7 @@ static void playback_reconnect_poll(uint32_t now) {
             mic_prepare_open || mic_recovery_pending || phone_output_recovery || suspend_recovery_pending ||
             playback_game.waiting_tx || playback_game.waiting_report || playback_game.restore_failed ||
             playback_adjust_busy(&playback_adjust) || playback_idle_phase==PLAYBACK_SUSPENDING ||
-            playback_idle_phase==PLAYBACK_STARTING)) return;
+            playback_idle_phase==PLAYBACK_STARTING || playback_idle_phase==PLAYBACK_CLAIMING)) return;
     if (!aacp_takeover_pending(peer)) {
         uint8_t saved[6], slot=read_uint8_last_flash();
         if (slot==1) read_slot1_mac(saved);
@@ -2945,6 +3044,11 @@ void dongle_playback_work_report(void) {
         (unsigned long)(eld ? playback_bitrate.ceiling : 0), (unsigned long)playback_bitrate.changes,
         (unsigned long)playback_bitrate.errors, (unsigned)playback_bitrate.active,
         (unsigned)playback_bitrate.frozen, (unsigned)playback_bitrate.reason);
+    printf("[TAKEOVER] phase=%u claim_active=%u session=%lu revision=%lu cid=0x%04x seid=%u age_ms=%lu\n",
+        (unsigned)playback_idle_phase, (unsigned)playback_claim.active,
+        (unsigned long)playback_claim.session, (unsigned long)playback_claim.revision,
+        (unsigned)playback_claim.cid, (unsigned)playback_claim.seid,
+        (unsigned long)(playback_claim.active ? now-playback_idle_transition_since : 0));
     phone_sink_loss_report();
 }
 

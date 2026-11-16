@@ -84,7 +84,7 @@ static bool allow_recovery, synchronous_request;
 static unsigned request_depth;
 static unsigned scheduled_interval, source_consumed;
 static unsigned audio_timer_interval, acc_num_simples, cur_codec, aaceld_bitrate = 256000;
-enum { PLAYBACK_RUNNING, PLAYBACK_SUSPENDING, PLAYBACK_SUSPENDED, PLAYBACK_STARTING };
+enum { PLAYBACK_RUNNING, PLAYBACK_SUSPENDING, PLAYBACK_SUSPENDED, PLAYBACK_STARTING, PLAYBACK_CLAIMING };
 static unsigned playback_idle_phase;
 typedef struct { void *context; uint32_t timeout; } btstack_timer_source_t;
 typedef struct { uint8_t *media_codec_information; } adtvp_media_codec_capabilities_t;

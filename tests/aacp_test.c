@@ -1317,6 +1317,113 @@ static void route_devices(bool include_other) {
     aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,packet,include_other?25:17);
 }
 static void route_steps(void) {for(unsigned i=0;i<8;++i){aacp_poll();drain();}}
+static void route_source(const uint8_t source[6],uint8_t type) {
+    uint8_t packet[]={4,0,4,0,0x0e,0,0,0,0,0,0,0,type};
+    if(source)for(unsigned i=0;i<6;++i)packet[6+i]=source[5-i];
+    aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,packet,sizeof(packet));
+}
+static void test_foreign_call_protects_current_peer(void) {
+    const uint8_t phone[6]={20,21,22,23,24,25};
+    fixture();ready();route_devices(true);
+    route_source(phone,1);
+    unsigned requests=connect_requests;
+    uint32_t revision=routing_revision;
+    assert(foreign_call && !aacp_audio_owned() && routing.relinquished);
+    assert(!aacp_takeover_request(peer) && !aacp_takeover_pending(peer));
+    assert(connect_requests==requests && routing_revision==revision && !aacp_tx_count);
+    route_owned(true);assert(!aacp_audio_owned());
+    uint8_t packet[]={4,0,4,0,0x0e,0,0x19,0x18,0x17,0x16,0x15,0x14,0};
+    for(unsigned size=0;size<sizeof(packet);++size) {
+        aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,packet,(uint16_t)size);
+        assert(foreign_call);
+    }
+    packet[12]=3;aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,packet,sizeof(packet));
+    assert(foreign_call);
+    packet[12]=1;memset(packet+6,0xff,6);
+    aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,packet,sizeof(packet));assert(foreign_call);
+    memset(packet+6,0,6);packet[12]=0;
+    aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid+1,packet,sizeof(packet));assert(foreign_call);
+    uint8_t list[33]={4,0,4,0,0x2e,0,0,0,3};
+    memcpy(list+9,local_host,6);
+    aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,list,sizeof(list));assert(foreign_call);
+    list[8]=0;aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,list,9);assert(foreign_call);
+    const uint8_t new_phone[6]={30,31,32,33,34,35};
+    route_source(new_phone,1); // The call can precede the updated connected-host list.
+    list[8]=2;memcpy(list+17,new_phone,6);
+    aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,list,25);assert(foreign_call);
+    route_devices(false);
+    assert(!foreign_call && !aacp_audio_owned() && !routing.pending);
+    route_owned(true);route_steps();assert(!aacp_audio_owned() && !route_claims);
+    assert(aacp_takeover_request(peer));route_steps();route_owned(true);aacp_poll();assert(aacp_audio_owned());
+
+    for(unsigned end=0;end<3;++end) {
+        fixture();ready();route_devices(true);route_source(phone,1);
+        route_source(end==0?NULL:end==1?phone:local_host,end==0?0:2);
+        assert(!foreign_call && !aacp_audio_owned() && !routing.pending);
+        route_steps();assert(!route_claims);
+        assert(aacp_takeover_request(peer));
+    }
+    fixture();ready();route_source(local_host,1);
+    assert(!foreign_call && aacp_audio_owned()); // A call on this host is not a foreign call.
+}
+static void test_foreign_call_cancels_queued_takeover(void) {
+    const uint8_t phone[6]={20,21,22,23,24,25};
+    for(unsigned stage=0;stage<=3;++stage) {
+        fixture();ready();route_owned(false);route_devices(true);
+        assert(aacp_takeover_request(peer));
+        for(unsigned sent=0;sent<stage;++sent){aacp_poll();drain();}
+        aacp_poll();assert(routing.pending && routing.stage==stage && routing.queued==(stage<3));
+        assert(aacp_tx_enqueue(aacp_request_notifications,sizeof(aacp_request_notifications)));
+        unsigned claims=route_claims,media=route_media,hijacks=route_hijacks;
+        route_source(phone,1);
+        assert(foreign_call && !routing.pending && !routing.queued && !routing.confirmed && !aacp_audio_owned());
+        assert(aacp_tx_count==1 && aacp_tx_queue[aacp_tx_head].data==aacp_request_notifications);
+        drain();route_owned(true);route_steps();assert(!aacp_audio_owned() && !aacp_takeover_request(peer));
+        route_source(phone,2);route_steps();
+        assert(!foreign_call && !routing.pending && !aacp_audio_owned());
+        assert(route_claims==claims && route_media==media && route_hijacks==hijacks);
+        assert(aacp_takeover_request(peer));route_steps();route_owned(true);aacp_poll();
+        assert(aacp_audio_owned() && !routing.pending);
+    }
+}
+static void test_foreign_call_resets_with_control_peer(void) {
+    const uint8_t phone[6]={20,21,22,23,24,25};
+    bd_addr_t replacement={7,8,9,10,11,12};
+    fixture();ready();route_source(phone,1);
+    uint32_t session=control_session;
+    aacp_disconnect();assert(!foreign_call && control_session!=session && !aacp_audio_owned());
+    ready();assert(!foreign_call && !aacp_audio_owned() && aacp_takeover_request(peer));
+    route_source(phone,1);assert(foreign_call && !routing.pending);
+    assert(aacp_takeover_request(replacement) && foreign_call);
+    assert(!aacp_takeover_request(peer)); // Choosing a different pair cannot erase this call report.
+    route_source(phone,1);assert(aacp_takeover_pending(replacement));
+    uint16_t old_cid=aacp_cid;
+    aacp_connect(replacement);fire(&aacp_connect_timer);opened(aacp_cid,0,replacement);drain();
+    assert(!foreign_call && !aacp_audio_owned());
+    uint8_t old_call[]={4,0,4,0,0x0e,0,0x19,0x18,0x17,0x16,0x15,0x14,1};
+    aacp_packet_handler(L2CAP_DATA_PACKET,old_cid,old_call,sizeof(old_call));
+    assert(!foreign_call && !aacp_audio_owned());
+    control(aacp_cid);assert(!aacp_audio_owned());
+    route_steps();route_owned(true);aacp_poll();assert(aacp_audio_owned()); // Fresh replacement claim/evidence.
+}
+static void test_cancelled_unowned_request_rejects_late_ownership(void) {
+    for(unsigned kind=0;kind<3;++kind) {
+        fixture();atomic_store(&audio_authority,false);connect_open();drain();
+        uint8_t anc[]={4,0,4,0,9,0,0x0d,3,0,0,0};
+        aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,anc,sizeof(anc));
+        if(kind==1)route_owned(false);
+        route_devices(true);assert(!aacp_audio_owned() && aacp_takeover_request(peer));
+        route_steps();assert(routing.pending && routing.stage==3);
+        if(kind==2){route_owned(true);assert(routing.confirmed && !aacp_audio_owned());}
+        aacp_routing_override();
+        assert(routing.relinquished && !routing.pending && !routing.queued);
+        route_owned(true);route_source(local_host,2);route_devices(false);route_steps();
+        assert(!aacp_audio_owned());
+        assert(aacp_takeover_request(peer));route_steps();route_owned(true);aacp_poll();assert(aacp_audio_owned());
+    }
+    fixture();ready();assert(aacp_takeover_request(peer));aacp_poll();assert(routing.queued);
+    aacp_routing_override();assert(aacp_audio_owned() && !routing.relinquished && !routing.pending && !routing.queued);
+}
 static void test_routing_send_rechecks_intent(void) {
     for(unsigned failure=0;failure<4;++failure)for(unsigned wrap=0;wrap<2;++wrap)
         for(unsigned stage=0;stage<3;++stage) {
@@ -1550,6 +1657,10 @@ int main(void) {
     test_recovery_budget_counts_consecutive_failures();
     test_routing_send_rechecks_intent();
     test_takeover_intent_survives_passive_reports();
+    test_foreign_call_protects_current_peer();
+    test_foreign_call_cancels_queued_takeover();
+    test_foreign_call_resets_with_control_peer();
+    test_cancelled_unowned_request_rejects_late_ownership();
     test_routing_authority_and_explicit_takeover();
     test_microphone_consumer_ownership();
     test_call_capture_wire_flow();

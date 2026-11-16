@@ -177,6 +177,8 @@ static uint16_t receive_buffer_last;
 static uint8_t pair_irk[16], pair_advertising_key[16], pair_key_address[6];
 static bool pair_irk_known, pair_case_supported;
 static uint32_t control_session;
+// Validated AudioSource CALL state belongs to the current AACP peer/session.
+static bool foreign_call;
 // One immutable queued packet at a time, not a new packet queue or audio buffer.
 static struct {
     uint8_t peer[6], other[6];
@@ -201,6 +203,7 @@ static void control_reset(void) {
     dongle_readback_clear(&control_readback);
     settings_reset(&settings);
     routing.queued = routing.confirmed = routing.known = routing.have_other = false;
+    foreign_call=false;
     routing.stage = 0;
     routing_authority(false);
     for (unsigned i = 0; i < sizeof(reports) / sizeof(reports[0]); ++i) {
@@ -417,7 +420,8 @@ static void routing_authority(bool allowed) {
 
 bool aacp_takeover_request(const uint8_t peer[6]) {
     if (!peer || !peer_address_valid(peer) || usb_mic_requested() ||
-        phone_call_mic_requested() || aacp_mic_active()) return false;
+        phone_call_mic_requested() || aacp_mic_active() ||
+        (foreign_call && !memcmp(peer,aacp_addr,6))) return false;
     if (routing.pending && !aacp_takeover_pending(routing.peer)) routing_cancel();
     if (routing.pending && memcmp(peer, routing.peer, 6)) return false;
     if (!++routing_revision) ++routing_revision;
@@ -438,7 +442,7 @@ bool aacp_takeover_request(const uint8_t peer[6]) {
 }
 
 bool aacp_takeover_pending(const uint8_t peer[6]) {
-    return peer && routing.pending && !memcmp(peer, routing.peer, 6) &&
+    return peer && routing.pending && !(foreign_call && !memcmp(peer,aacp_addr,6)) && !memcmp(peer, routing.peer, 6) &&
            (uint32_t)(btstack_run_loop_get_time_ms() - routing.since) < AACP_TAKEOVER_MS;
 }
 
@@ -453,6 +457,7 @@ aacp_routing_state_t aacp_routing_state(void) {
 void aacp_routing_override(void) {
     if (!++routing_revision) ++routing_revision;
     routing_nonce=0; routing_action=0;
+    if(!aacp_audio_owned()) routing.relinquished=true;
     routing_cancel();
 }
 
@@ -515,6 +520,7 @@ static void routing_packet(const uint8_t *packet, uint16_t size) {
             routing_authority(false);
         }
     } else if (aacp_route_devices(packet, size, local, other, &sole)) {
+        if(sole)foreign_call=false;
         bool changed = memcmp(other, routing.other, 6) != 0;
         bool sole_claim = sole && routing.pending && routing.stage;
         if (changed && routing.have_other && routing.pending) {
@@ -529,7 +535,17 @@ static void routing_packet(const uint8_t *packet, uint16_t size) {
         routing.have_other = aacp_route_address_valid(other);
         if (sole && !routing.relinquished && !routing.pending) routing_authority(true);
         if (sole && routing.pending && routing.stage) routing.confirmed = true;
-    } else if (aacp_route_source(packet, size, source, &type) && type) {
+    } else if (aacp_route_source(packet, size, source, &type)) {
+        foreign_call=type==1 && memcmp(source,local,6)!=0;
+        if(foreign_call) {
+            if(!memcmp(routing.peer,aacp_addr,6)) {
+                routing.known=routing.relinquished=true;
+                routing_cancel();
+            }
+            routing_authority(false);
+            return;
+        }
+        if(!type)return;
         routing.known = true;
         if (!memcmp(source, local, 6)) {
             if (routing.pending) routing.confirmed = routing.stage != 0;

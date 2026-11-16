@@ -218,6 +218,20 @@ Queued OWN/media/Hijackv2 commands also recheck the active AirPods peer and the
 original ten-second request deadline when `CAN_SEND_NOW` arrives. An expired
 request or a different peer cannot send a late takeover command. Dropping that
 outgoing intent does not itself revoke already-confirmed ownership.
+Canceling an unowned request leaves it yielded, so a late positive report cannot
+revive the retired request without a fresh explicit intent.
+For AAC-ELD, that explicit request can negotiate one AVDTP Start before ownership
+is confirmed. The Mac capture orders Start/Accept before the local media-source
+report. The dongle holds an accepted Start without encoding PCM or running media
+timers; positive ownership then follows the existing buffer preparation and starts
+the pipeline without another Start. The attempt retains the original three-second
+transition deadline within the ten-second request and is bound to its peer,
+control session and request revision. Cancellation, a newer remote request or
+scope loss suspends it; a peer Suspend does not automatically retry the same
+intent. Standby and automatic reconnect cannot initiate this negotiation.
+An authoritative foreign CALL source report cancels pending takeover work and
+blocks a new media takeover until a valid noncall report or session reset clears
+it. Clearing that flag does not create a new request or reclaim playback.
 Unknown routing stays passive, including at startup; standalone automatic start
 therefore needs a valid local-owner/source or sole-local device report. Older
 models and cold standalone startup require hardware verification.
@@ -227,7 +241,10 @@ preparation chunks and rechecks encoder/source identity before continuing.
 It preserves the audio samples, receiver targets, static workspace, PCM32,
 codec bandwidth, existing volume behavior, `.0076` radio policy and manual
 button/app reconnect permission. Actual interrupt timing, USB packet continuity,
-listening and phone-to-dongle takeover acceptance remain pending.
+listening and phone-to-dongle takeover acceptance remain pending for the corrected
+build. The first listening comparison was clean but exposed a stale policy
+timestamp after PCM preparation; policy now refreshes its timestamp before
+changing clock intervals rather than manufacturing almost a timer wrap of credit.
 
 A confirmed competing owner requests Pause from this dongle's active music host and
 suspends its outgoing media while retaining the control connection. Fresh USB

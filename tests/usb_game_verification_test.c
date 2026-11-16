@@ -4,22 +4,20 @@
 #include "playback_idle_test.c"
 #undef main
 
-static uint32_t control_session,delay_revision,buffer_serial,request_count;
+static uint32_t delay_revision,buffer_serial,request_count;
 static uint32_t requests_60,requests_150;
 static uint32_t mic_prepare_serial;
 static uint16_t reported_delay,buffer_last,queued_target;
-static bool defer_send,control_ready,admission_busy;
+static bool defer_send,admission_busy;
 static unsigned admission_attempts;
 static bool low_latency_flush;
-static bool playback_released,playback_release_pending;
+static bool playback_release_pending;
 // This focused USB suite never initiates handover; its full lifecycle is tested separately.
 static void playback_release_close(void) {assert(false);}
 static void bt_hci_airpods_flush_timeout(bool enabled) {low_latency_flush=enabled;}
 static void verification_test_buffer_cancel(void) {queued_target=0;}
 #define DONGLE_ACCEPTED 0
-static bool aacp_control_ready(void) {return control_ready;}
 static bool aacp_mic_uplink_active(void) {return false;}
-static uint32_t aacp_control_session(void) {return control_session;}
 static uint32_t aacp_receive_buffer_serial(void) {return buffer_serial;}
 static uint16_t aacp_receive_buffer_last(void) {return buffer_last;}
 static void actual_send(void) {
