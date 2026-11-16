@@ -177,6 +177,16 @@ meaning and 60 ms admission check, so it normally returns busy because the
 baseline already matches. It is not reinterpreted as a request for 60 ms.
 Cancellation, expiry and late acknowledgements restore 200 ms.
 
+From 0.1.67, Game Mode also retains the selected AirPods ACL's
+controller-confirmed packet-type mask. It no longer adds the former `0x2204`
+3-Mbit EDR exclusions. The initial bounded controller request and its matching
+Status/Packet Type Changed admission remain; an unknown or failed baseline is
+not reported as confirmed. Toggling Game Mode does not issue another packet-type
+command. Existing restoration debt keeps the same owner/epoch, command-credit,
+timeout, late-reply and disconnect fences. Receiver buffer targets stay at 60 ms
+for Game Mode and 150 ms for normal mode, with the existing finite clock and
+pitch-preserving USB transition. Codec and volume policies are unchanged.
+
 The override expires after 120 seconds, including across timer wrap. Repeated
 enable requests and playback polling do not renew it. Disable, selected-peer or
 ACL changes, source/control-session or audio-ownership loss, microphone use,

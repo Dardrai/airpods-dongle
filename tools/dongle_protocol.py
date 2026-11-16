@@ -228,6 +228,16 @@ LAYOUTS = {
         'flag_groups': (),
         'constants': {'lease_milliseconds': 5000},
     },
+    'firmware_version': {
+        'size': 6,
+        'request': False,
+        'version': 1,
+        'fields': {'version': (0, 1), 'major': (1, 1), 'minor': (2, 1), 'patch': (3, 2), 'variant': (5, 1)},
+        'signed': (),
+        'groups': {},
+        'flag_groups': (),
+        'constants': {},
+    },
 }
 USB = {
     'vendor_id': 51966,

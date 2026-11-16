@@ -79,7 +79,6 @@ static struct {
     bool active, accepted, baseline;
 } media_packet_pending;
 static uint32_t media_packet_epoch;
-static bool media_packet_game;
 static struct {
     bt_hci_radio_diagnostics_t data;
     uint32_t sampled_at[5];
@@ -123,7 +122,6 @@ static void media_flush_forget(void) {
     media_flush.status = UINT8_MAX;
     media_flush.failed = false;
     media_flush.low_latency = media_flush.comparison = false;
-    media_packet_game = false;
     media_flush.since = btstack_run_loop_get_time_ms();
     memset(media_flush.address, 0, sizeof(media_flush.address));
 }
@@ -164,7 +162,6 @@ static void media_flush_policy(void) {
 }
 void bt_hci_airpods_flush_timeout(bool low_latency) {
     hci_connection_t *connection = media_flush_bind();
-    media_packet_game = connection != NULL && low_latency;
     if (connection == NULL || !hci_non_flushable_packet_boundary_flag_supported()) return;
     media_flush.low_latency = low_latency;
     media_flush_policy();
@@ -325,9 +322,7 @@ static void media_packet_poll(void) {
     for (unsigned i = 0; i < 2; ++i) {
         if (media_packets[i].handle == HCI_CON_HANDLE_INVALID) continue;
         uint16_t desired = media_packets[i].baseline ? media_packets[i].normal : media_packets[i].requested;
-        if (media_packets[i].baseline && (int)i == selected && media_packet_game &&
-            media_flush.handle == media_packets[i].handle && !memcmp(media_flush.address, media_packets[i].address, 6))
-            desired |= ACL_PACKET_TYPES_EDR3;
+        // Game Mode changes receiver timing, not the controller-confirmed packet permissions.
         if (desired != media_packets[i].desired) {
             media_packets[i].desired = desired;
             media_packets[i].failed = false;

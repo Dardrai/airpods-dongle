@@ -47,12 +47,32 @@ Outputs (committed, so the firmware build needs no extra step):
 | `src/tinyusb/dongle_protocol_spec.h` | named constants, setting value validator, write predicates |
 | `src/btstack/dongle_settings_spec.h` | setting catalog and per-model profile table |
 | `tools/dongle_protocol.py` | the same data for the Python tools and the CLI |
-| `protocol/generated/DongleControlProtocol.kt` | a Kotlin object for Android clients, committed as a reviewed sample |
+| `protocol/generated/DongleControlProtocol.kt` | Kotlin constants consumed by LibrePods Android |
+| `protocol/generated/dongle_control_protocol.rs` | Rust constants consumed by NTPods |
 
-The Kotlin sample uses package `me.kavishdevar.librepods.dongle` and object
-`DongleControlProtocol` so it can replace the Android client's hand-written
-file. Each spec section becomes a nested object, each `name` an UPPER_SNAKE
+The Kotlin binding uses package `me.kavishdevar.librepods.dongle` and object
+`DongleControlProtocol`. Each spec section becomes a nested object, each `name` an UPPER_SNAKE
 constant, field offsets end in `_OFFSET` and multi-byte sizes in `_SIZE`.
+
+## Updating app clients
+
+Export both bindings and the shared test vectors from this checkout:
+
+```
+python3 tools/gen_protocol.py
+python3 tools/sync_clients.py --android /path/to/librepods/android --windows /path/to/ntpods
+python3 tools/sync_clients.py --android /path/to/librepods/android --windows /path/to/ntpods --check
+```
+
+The export writes only the generated module, golden vectors, offline verifier and
+`dongle-protocol.lock.json`. The lock records the specification/generator hashes
+and exact exported text hashes. Both app CI workflows run
+`tools/check_dongle_protocol.py` from their client root (Android's root is its
+`android` directory). This detects edited or missing exports without requiring
+network access or another repository. The source-side `--check` also detects a
+client pinned to an older specification. Parsing and transport ownership stay in
+the existing app modules; their tests decode these same vectors through production
+code. Update all clients when changing the wire format.
 
 ## Golden vectors (`vectors.json`)
 
@@ -73,5 +93,6 @@ to test against. Hex strings are raw bytes; enumerated values are spec names.
 
 Consumers in this repository: `tests/protocol_vectors_test.c` (production C
 code; `tools/test.py` converts the JSON with `gen_protocol.py --vectors-c`) and
-`tests/test_protocol_vectors.py` (generated Python module and CLI). Add new
+`tests/test_protocol_vectors.py` (generated Python module and CLI). The exported
+vectors also exercise LibrePods Android and NTPods production parsers. Add new
 cases to the JSON rather than to one language's test so all clients share them.

@@ -268,6 +268,6 @@ int main(void) {
     assert(dongle_features_request(0,info,1,out,5,&n)==1 && !n);
     assert(dongle_features_request(1,info,1,info,8,&n)==0 && n==6 && info[0]==1 &&
         info[1]==AIRPODS_DONGLE_VERSION_MAJOR && info[2]==AIRPODS_DONGLE_VERSION_MINOR &&
-        (info[3]|info[4]<<8)==AIRPODS_DONGLE_VERSION_PATCH && info[5]==0);
+        (info[3]|info[4]<<8)==AIRPODS_DONGLE_VERSION_PATCH && info[5]==AIRPODS_DONGLE_VARIANT);
     puts("typed features: validation, exact integer values, aliased buffers, bounded responses and result mapping passed");
 }

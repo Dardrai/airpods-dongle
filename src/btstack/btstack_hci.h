@@ -28,7 +28,8 @@ bool bt_hci_phone_peer_connected(const uint8_t address[6]);
 uint32_t bt_hci_phone_session(const uint8_t address[6]);
 bool bt_hci_phone_address(uint8_t address[6]);
 void bt_hci_phone_poll(void);
-// Selected AirPods Game Mode link policy; retiring live links restore their confirmed packet baseline.
+// Selected AirPods Game Mode retains the confirmed packet mask and normal 200-ms flush policy.
+// Retiring live links still restore any outstanding packet-policy debt.
 // Media alone is flushable; signaling/AACP and the phone ACL keep their existing policy.
 void bt_hci_airpods_flush_timeout(bool low_latency);
 // Legacy bounded 200-ms baseline comparison; normal Game Mode now retains that baseline.

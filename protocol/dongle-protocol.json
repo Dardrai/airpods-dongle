@@ -553,6 +553,19 @@
           {"name": "acquire", "value": 0}, {"name": "renew", "value": 1}, {"name": "release", "value": 2}, {"name": "set_level", "value": 3}]}
       ],
       "constants": [{"name": "lease_milliseconds", "value": 5000}]
+    },
+    {
+      "name": "firmware_version",
+      "comment": "Feature 24 response; project version and radio build variant. Read-only.",
+      "version": 1,
+      "size": 6,
+      "fields": [
+        {"name": "version", "offset": 0, "size": 1},
+        {"name": "major", "offset": 1, "size": 1},
+        {"name": "minor", "offset": 2, "size": 1},
+        {"name": "patch", "offset": 3, "size": 2},
+        {"name": "variant", "offset": 5, "size": 1}
+      ]
     }
   ],
   "usb": {

@@ -16,6 +16,13 @@ pipeline.
 
 ## Implementation and ownership
 
+From 0.1.67, Game Mode preserves both the controller-confirmed packet mask and
+the normal 200 ms controller flush timeout. It changes the receiver's 60/150 ms
+target and finite audio clock correction, without adding 3-Mbit EDR exclusions.
+Startup confirmation and outstanding controller-command restoration retain
+their owner, epoch and late-reply fences. This policy change leaves the USB
+transition and PCM processing below unchanged.
+
 `playback_tempo.h` chooses shared stereo waveform offsets in 240-frame hops.
 Its bounded search includes a 2400-frame lag span to cover deep bass. It uses
 adjacent sample pairs rather than a mono sum, preserving opposite-polarity

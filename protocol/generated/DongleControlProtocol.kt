@@ -707,6 +707,18 @@ internal object DongleControlProtocol {
         }
     }
 
+    /** Feature 24 response; project version and radio build variant. Read-only. */
+    object FirmwareVersion {
+        const val SIZE = 6
+        const val VERSION = 1
+        const val VERSION_OFFSET = 0
+        const val MAJOR_OFFSET = 1
+        const val MINOR_OFFSET = 2
+        const val PATCH_OFFSET = 3
+        const val PATCH_SIZE = 2
+        const val VARIANT_OFFSET = 5
+    }
+
     /** USB identity and the vendor HID collection that carries reports 2 and 3. */
     object Usb {
         const val VENDOR_ID = 0xcafe
