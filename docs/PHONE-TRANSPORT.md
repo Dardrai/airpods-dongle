@@ -209,9 +209,25 @@ length/address cases are covered in `aacp_routing_test.c`.
 The request sends ownership, then the captured media and Hijackv2 messages when
 another host is known. It waits up to ten seconds for positive remote ownership
 evidence. It does not treat a locally queued or transmitted request as success.
+In 0.1.69, passive ownership/source reports describing the previous host do not
+cancel that still-current explicit request halfway through OWN/media/Hijackv2.
+They still clear ownership and any earlier confirmation: playback requires fresh
+positive evidence. Expiry, peer/session changes, explicit cancellation and a
+newer exact remote Hijack/Reverse request retain their existing cancellation rules.
+Queued OWN/media/Hijackv2 commands also recheck the active AirPods peer and the
+original ten-second request deadline when `CAN_SEND_NOW` arrives. An expired
+request or a different peer cannot send a late takeover command. Dropping that
+outgoing intent does not itself revoke already-confirmed ownership.
 Unknown routing stays passive, including at startup; standalone automatic start
 therefore needs a valid local-owner/source or sole-local device report. Older
 models and cold standalone startup require hardware verification.
+
+The 0.1.69 Game Mode change separately releases PCM exclusion between bounded
+preparation chunks and rechecks encoder/source identity before continuing.
+It preserves the audio samples, receiver targets, static workspace, PCM32,
+codec bandwidth, existing volume behavior, `.0076` radio policy and manual
+button/app reconnect permission. Actual interrupt timing, USB packet continuity,
+listening and phone-to-dongle takeover acceptance remain pending.
 
 A confirmed competing owner requests Pause from this dongle's active music host and
 suspends its outgoing media while retaining the control connection. Fresh USB

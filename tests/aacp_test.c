@@ -36,7 +36,7 @@ uint32_t dongle_playback_mic_recovery_revision(void) {return playback_recovery_r
 void dongle_playback_mic_recovery_abort(void) {++playback_aborts;aacp_mic_recovery_failed();aacp_disconnect();}
 static bd_addr_t peer = {1, 2, 3, 4, 5, 6};
 static const uint8_t local_host[6] = {10,11,12,13,14,15};
-static unsigned ownership_changes, route_claims, route_media, route_hijacks;
+static unsigned ownership_changes, route_claims, route_media, route_hijacks, can_send_requests;
 void gap_local_bd_addr(bd_addr_t address) {memcpy(address,local_host,6);}
 void dongle_playback_ownership_changed(bool owned) {(void)owned;++ownership_changes;}
 static unsigned connect_requests;
@@ -60,7 +60,7 @@ uint8_t l2cap_create_channel(btstack_packet_handler_t handler, bd_addr_t addr,
     return create_result;
 }
 void l2cap_disconnect(uint16_t cid) { disconnects++; last_disconnected = cid; }
-void l2cap_request_can_send_now_event(uint16_t cid) { assert(cid != 0); }
+void l2cap_request_can_send_now_event(uint16_t cid) { assert(cid != 0);++can_send_requests; }
 void dongle_playback_receive_buffer_sent(uint32_t sent_at) {
     assert(sent_at==now && aacp_receive_buffer_serial()!=0);
     ++buffer_send_callbacks;
@@ -162,7 +162,7 @@ static void fixture(void) {
     connects = disconnects = sends = starts = stops = decoded = resets = 0;
     modern_init_sends=legacy_init_sends=capability_sends=0;
     setting_sends = 0;
-    ownership_changes=route_claims=route_media=route_hijacks=0;
+    ownership_changes=route_claims=route_media=route_hijacks=can_send_requests=0;
     atomic_store(&audio_authority,true); // Existing capture fixtures assume a resolved sole host.
     buffer_send_callbacks = 0;
     create_result = send_result = 0;
@@ -1317,6 +1317,105 @@ static void route_devices(bool include_other) {
     aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,packet,include_other?25:17);
 }
 static void route_steps(void) {for(unsigned i=0;i<8;++i){aacp_poll();drain();}}
+static void test_routing_send_rechecks_intent(void) {
+    for(unsigned failure=0;failure<4;++failure)for(unsigned wrap=0;wrap<2;++wrap)
+        for(unsigned stage=0;stage<3;++stage) {
+            fixture();ready();route_owned(false);route_devices(true);
+            now=wrap?UINT32_MAX-4999u:0;
+            assert(aacp_takeover_request(peer));
+            uint32_t since=routing.since;
+            for(unsigned sent=0;sent<stage;++sent){aacp_poll();drain();}
+            aacp_poll();assert(routing.queued && routing.stage==stage);
+            assert(aacp_tx_enqueue(aacp_request_notifications,sizeof(aacp_request_notifications)));
+            unsigned before=sends, requests=can_send_requests;
+            if(failure==0)now=since+AACP_TAKEOVER_MS;
+            else if(failure==1)aacp_addr[0]^=0x80;
+            else if(failure==2)aacp_routing_override();
+            else now=since+AACP_TAKEOVER_MS-1u;
+            event(L2CAP_EVENT_CAN_SEND_NOW,aacp_cid); // Intentionally before aacp_poll().
+            assert(routing.since==since && !aacp_audio_owned());
+            if(failure==2) {
+                assert(!routing.pending && !routing.queued && !aacp_tx_count && sends==before+1);
+                continue;
+            }
+            if(failure==3) {
+                assert(routing.pending && !routing.queued && routing.stage==stage+1 && sends==before+1);
+                ++before;
+            } else {
+                assert(!routing.pending && !routing.queued && routing.relinquished && sends==before);
+            }
+            assert(aacp_tx_count==1 && aacp_tx_queue[aacp_tx_head].data==aacp_request_notifications);
+            assert(can_send_requests==requests+1);
+            event(L2CAP_EVENT_CAN_SEND_NOW,aacp_cid);
+            assert(!aacp_tx_count && sends==before+1);
+            if(failure<2){route_owned(true);assert(!aacp_audio_owned());}
+        }
+    fixture();ready();assert(aacp_audio_owned() && !routing.relinquished);
+    assert(aacp_takeover_request(peer));aacp_poll();assert(routing.queued);
+    now=routing.since+AACP_TAKEOVER_MS;
+    event(L2CAP_EVENT_CAN_SEND_NOW,aacp_cid);
+    assert(!routing.pending && !routing.queued && !aacp_tx_count && !route_claims);
+    assert(aacp_audio_owned() && !routing.relinquished);
+}
+static void route_passive_negative(unsigned kind) {
+    if(!kind)route_owned(false);
+    else {
+        uint8_t packet[]={4,0,4,0,0x0e,0,0x19,0x18,0x17,0x16,0x15,0x14,2};
+        aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,packet,sizeof(packet));
+    }
+}
+static void test_takeover_intent_survives_passive_reports(void) {
+    for(unsigned kind=0;kind<2;++kind) {
+        fixture();ready();route_owned(false);route_devices(true);
+        assert(aacp_takeover_request(peer));
+        uint32_t since=routing.since;
+        aacp_poll();drain();assert(routing.stage==1 && route_claims==1);
+        route_passive_negative(kind);
+        assert(routing.pending && !routing.confirmed && !aacp_audio_owned());
+        route_owned(true);assert(routing.confirmed);
+        aacp_poll();assert(routing.queued);
+        route_passive_negative(kind);
+        assert(routing.pending && routing.queued && !routing.confirmed && !aacp_audio_owned());
+        assert(routing.since==since);
+        drain();route_steps();
+        assert(routing.stage==3 && routing.pending && !aacp_audio_owned());
+        assert(route_claims==1 && route_media==1 && route_hijacks==1);
+        // The relay may reach the phone before the buds report the new owner.
+        route_owned(true);assert(routing.confirmed);
+        route_passive_negative(kind);aacp_poll();
+        assert(routing.pending && !routing.confirmed && !aacp_audio_owned());
+        ++now;route_owned(true);aacp_poll();
+        assert(aacp_audio_owned() && !routing.pending && !routing.relinquished);
+        route_passive_negative(kind);route_steps();
+        assert(!aacp_audio_owned() && !routing.pending);
+        assert(route_claims==1 && route_media==1 && route_hijacks==1);
+
+        for(unsigned wrap=0;wrap<2;++wrap) {
+            fixture();ready();route_owned(false);route_devices(true);
+            now=wrap?UINT32_MAX-4999u:0;
+            assert(aacp_takeover_request(peer));since=routing.since;
+            aacp_poll();drain();
+            now=since+AACP_TAKEOVER_MS;
+            route_passive_negative(kind);
+            assert(!routing.pending && !routing.queued && !aacp_audio_owned());
+            route_owned(true);route_steps();
+            assert(!aacp_audio_owned() && route_claims==1 && !route_media && !route_hijacks);
+        }
+    }
+    const aacp_route_kind_t kinds[]={AACP_ROUTE_HIJACK,AACP_ROUTE_REVERSE};
+    for(unsigned i=0;i<sizeof(kinds)/sizeof(*kinds);++i) {
+        fixture();ready();route_owned(false);route_devices(true);
+        assert(aacp_takeover_request(peer));aacp_poll();drain();
+        aacp_poll();assert(routing.queued && routing.stage==1);
+        uint8_t packet[AACP_ROUTE_MAX_PACKET];
+        uint16_t size=(uint16_t)aacp_route_build(packet,sizeof(packet),kinds[i],local_host,routing.other);
+        assert(size);packet[4]=0x11;
+        aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,packet,size);
+        assert(!routing.pending && !routing.queued && !aacp_audio_owned());
+        route_owned(true);route_steps();
+        assert(!aacp_audio_owned() && route_claims==1 && !route_media && !route_hijacks);
+    }
+}
 static void test_routing_authority_and_explicit_takeover(void) {
     fixture();atomic_store(&audio_authority,false);
     connect_open();drain();
@@ -1370,19 +1469,6 @@ static void test_routing_authority_and_explicit_takeover(void) {
     route_steps();assert(route_claims==1); // No retry loop or implicit reconnect.
     usb_capture_wanted=true;assert(!aacp_takeover_request(peer));usb_capture_wanted=false;
     call_capture_wanted=true;assert(!aacp_takeover_request(peer));
-
-    // A newer negative report cancels an earlier positive during the same claim.
-    fixture();ready();route_owned(false);route_devices(true);
-    assert(aacp_takeover_request(peer));aacp_poll();drain();assert(routing.stage==1);
-    route_owned(true);assert(routing.confirmed);
-    route_owned(false);route_steps();
-    assert(!routing.pending && !aacp_audio_owned() && route_claims==1 && !route_media && !route_hijacks);
-    route_owned(true);assert(!aacp_audio_owned()); // Late stale positive cannot re-arm a canceled claim.
-    fixture();ready();route_owned(false);route_devices(true);
-    assert(aacp_takeover_request(peer));aacp_poll();drain();route_owned(true);
-    uint8_t other_source[]={4,0,4,0,0x0e,0,0x19,0x18,0x17,0x16,0x15,0x14,2};
-    aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,other_source,sizeof(other_source));route_steps();
-    assert(!routing.pending && !aacp_audio_owned());
 
     fixture();ready();assert(aacp_audio_owned());transitions=ownership_changes;
     aacp_channel_failed();assert(!aacp_audio_owned() && ownership_changes==transitions+1);
@@ -1462,6 +1548,8 @@ int main(void) {
     test_startup_retired_channel_cannot_accept_or_retry();
     test_connection_permission_is_peer_bound_and_expires();
     test_recovery_budget_counts_consecutive_failures();
+    test_routing_send_rechecks_intent();
+    test_takeover_intent_survives_passive_reports();
     test_routing_authority_and_explicit_takeover();
     test_microphone_consumer_ownership();
     test_call_capture_wire_flow();

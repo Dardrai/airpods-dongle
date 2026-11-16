@@ -508,7 +508,8 @@ static void routing_packet(const uint8_t *packet, uint16_t size) {
             if (routing.pending) routing.confirmed = routing.stage != 0;
             else if (!routing.relinquished) routing_authority(true);
         } else {
-            if (routing.pending && routing.stage) routing_cancel();
+            // Current owner reports can lag the explicit OWN/MEDIA/HIJACK sequence.
+            if (routing.pending && !aacp_takeover_pending(routing.peer)) routing_cancel();
             routing.confirmed = false;
             routing.relinquished = true;
             routing_authority(false);
@@ -534,7 +535,7 @@ static void routing_packet(const uint8_t *packet, uint16_t size) {
             if (routing.pending) routing.confirmed = routing.stage != 0;
             else if (!routing.relinquished) routing_authority(true);
         } else {
-            if (routing.pending && routing.stage) routing_cancel();
+            if (routing.pending && !aacp_takeover_pending(routing.peer)) routing_cancel();
             routing.confirmed = false;
             routing.relinquished = true;
             routing_authority(false);
@@ -911,6 +912,12 @@ static void aacp_handle_can_send_now(void) {
     if (!aacp_connected || aacp_tx_count == 0) return;
     aacp_pkt_t p = aacp_tx_queue[aacp_tx_head];
     uint32_t now=btstack_run_loop_get_time_ms();
+    if (p.data==routing.tx && !aacp_takeover_pending(aacp_addr)) {
+        if (!aacp_audio_owned()) routing.relinquished=true;
+        routing_cancel();
+        if (aacp_tx_count) l2cap_request_can_send_now_event(aacp_cid);
+        return;
+    }
     // A late positive response can make the still-unsent fallback handshake unnecessary.
     if (p.data==aacp_handshake_legacy && aacp_got_control) {
         aacp_tx_head=(uint8_t)((aacp_tx_head+1u)%AACP_TX_QUEUE_LEN);
