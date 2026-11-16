@@ -545,8 +545,8 @@ static void routing_packet(const uint8_t *packet, uint16_t size) {
             routing_authority(false);
             return;
         }
-        if(!type)return;
         routing.known = true;
+        if(!type)return;
         if (!memcmp(source, local, 6)) {
             if (routing.pending) routing.confirmed = routing.stage != 0;
             else if (!routing.relinquished) routing_authority(true);

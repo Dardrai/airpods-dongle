@@ -232,6 +232,9 @@ intent. Standby and automatic reconnect cannot initiate this negotiation.
 An authoritative foreign CALL source report cancels pending takeover work and
 blocks a new media takeover until a valid noncall report or session reset clears
 it. Clearing that flag does not create a new request or reclaim playback.
+A validated Audio Source NONE report marks routing as observed without changing
+ownership or creating a request. This allows a later explicit takeover from an
+idle phone while keeping unsolicited startup passive.
 Unknown routing stays passive, including at startup; standalone automatic start
 therefore needs a valid local-owner/source or sole-local device report. Older
 models and cold standalone startup require hardware verification.

@@ -1322,6 +1322,35 @@ static void route_source(const uint8_t source[6],uint8_t type) {
     if(source)for(unsigned i=0;i<6;++i)packet[6+i]=source[5-i];
     aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,packet,sizeof(packet));
 }
+static void test_source_none_is_known_without_ownership(void) {
+    fixture();atomic_store(&audio_authority,false);connect_open();drain();
+    uint8_t anc[]={4,0,4,0,9,0,0x0d,3,0,0,0};
+    aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,anc,sizeof(anc));
+    assert(aacp_control_ready() && !routing.known && !aacp_audio_owned());
+    uint8_t none[]={4,0,4,0,0x0e,0,0,0,0,0,0,0,0};
+    aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid+1,none,sizeof(none));
+    aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,none,sizeof(none)-1);
+    none[5]=1;aacp_packet_handler(L2CAP_DATA_PACKET,aacp_cid,none,sizeof(none));
+    assert(!routing.known && !aacp_audio_owned() && !routing.pending);
+    unsigned before=sends,changes=ownership_changes,requests=connect_requests;
+    route_source(NULL,0);route_devices(true);route_steps();
+    assert(routing.known && !aacp_audio_owned() && !routing.pending && !routing.queued);
+    assert(sends==before && ownership_changes==changes && connect_requests==requests);
+    assert(aacp_takeover_request(peer));route_steps();
+    assert(routing.stage==3 && routing.pending && route_claims==1 && !aacp_audio_owned());
+    route_owned(true);aacp_poll();assert(aacp_audio_owned());
+
+    fixture();ready();before=sends;changes=ownership_changes;
+    route_source(NULL,0);route_steps();
+    assert(routing.known && aacp_audio_owned() && !routing.pending && sends==before && ownership_changes==changes);
+
+    const uint8_t phone[6]={20,21,22,23,24,25};
+    fixture();ready();route_source(phone,1);changes=ownership_changes;before=sends;
+    route_source(NULL,0);route_steps();
+    assert(routing.known && !foreign_call && routing.relinquished && !aacp_audio_owned() && !routing.pending);
+    assert(sends==before && ownership_changes==changes);
+    assert(aacp_takeover_request(peer)); // A fresh explicit request is allowed after the call ends.
+}
 static void test_foreign_call_protects_current_peer(void) {
     const uint8_t phone[6]={20,21,22,23,24,25};
     fixture();ready();route_devices(true);
@@ -1657,6 +1686,7 @@ int main(void) {
     test_recovery_budget_counts_consecutive_failures();
     test_routing_send_rechecks_intent();
     test_takeover_intent_survives_passive_reports();
+    test_source_none_is_known_without_ownership();
     test_foreign_call_protects_current_peer();
     test_foreign_call_cancels_queued_takeover();
     test_foreign_call_resets_with_control_peer();
