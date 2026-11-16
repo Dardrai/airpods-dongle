@@ -111,6 +111,15 @@ all interrupts or radio scheduling. Production-path tests also model 3.37 ms
 DSP plus 6.0–6.3 ms encoder work, USB ticks, a 40 ms stall and an insufficient
 throughput case that must fail finitely rather than claim a completed buffer fill.
 
+Code `52a0bf8` passed the PC listening check on 2026-11-17: paused-phone button
+takeover and both Game Mode transitions sounded clean, with no menu errors.
+A 22.31-second switching window retained ownership/session/generation/PCM32,
+with active drop/zero, USB errors, discarded debt, recoveries and flushes all zero.
+Normal Off and confirmed On are observed; the later Off request is captured
+restoring and its settled menu result is user-reported. The startup-drop count
+persists, so the zero active counters are not a diagnostic reset. Later manual
+reconnects are outside that window. Acoustic latency was not measured.
+
 Hardware music, both transitions, rapid toggle, pause/resume, volume and weak
 signal checks are required before calling the preview accepted. Exact source,
 test, binary, benchmark and deployment receipts belong with the release.

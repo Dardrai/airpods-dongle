@@ -245,13 +245,23 @@ models and cold standalone startup require hardware verification.
 
 The 0.1.69 Game Mode change separately releases PCM exclusion between bounded
 preparation chunks and rechecks encoder/source identity before continuing.
-It preserves the audio samples, receiver targets, static workspace, PCM32,
+It preserves the audio samples, receiver targets, audio workspace, PCM32,
 codec bandwidth, existing volume behavior, `.0076` radio policy and manual
-button/app reconnect permission. Actual interrupt timing, USB packet continuity,
-listening and phone-to-dongle takeover acceptance remain pending for the corrected
-build. The first listening comparison was clean but exposed a stale policy
+button/app reconnect permission. The first listening comparison was clean but exposed a stale policy
 timestamp after PCM preparation; policy now refreshes its timestamp before
 changing clock intervals rather than manufacturing almost a timer wrap of credit.
+
+PC hardware checks on code `52a0bf8` passed on 2026-11-17: the user confirmed
+one-button takeover from a paused phone, clean Game Mode On/Off transitions and
+no menu errors. A 22.31-second capture retained the same ownership, control
+session, connection generation and PCM32 USB format throughout switching, with
+zero active drops, inserted silence, USB errors, discarded debt, timing recoveries
+or controller flushes. Normal Off with a nonzero delay is observed before On;
+On is confirmed and the later Off request is captured restoring. The final
+settled-Off menu result is user-reported, not reconstructed from telemetry.
+Subsequent manual setting/reconnect experiments use a new session and are excluded.
+Actual interrupt-mask latency, acoustic latency, weak signal and live calls were
+not measured in this check. LibrePods and the phone dongle were unchanged.
 
 A confirmed competing owner requests Pause from this dongle's active music host and
 suspends its outgoing media while retaining the control connection. Fresh USB
