@@ -2808,6 +2808,8 @@ void dongle_playback_poll(void) {
     playback_bitrate_poll(now);
     playback_audio_work(now);
     if (playback_phone_recovery_poll()) { bt_hci_airpods_flush_timeout(false); return; }
+    // PCM preparation can accrue a newer clock tick before policy changes its interval.
+    now=btstack_run_loop_get_time_ms();
     if (profile_pending && (!peer || memcmp(peer,profile_peer,6))) {
         profile_pending=profile_reconnect=false; playback_options=profile_previous;
     }

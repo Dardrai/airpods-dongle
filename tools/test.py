@@ -115,7 +115,9 @@ def playback_lifecycle_sources(directory):
         defaults.append(source[start:source.index(";", start) + 1])
     (directory / "playback_defaults.inc").write_text("\n".join(defaults))
     clock_functions = []
-    for signature in ["static void playback_clock_store(", "static void playback_clock_switch(", "static void playback_adjust_cancel_stream("]:
+    for signature in ["static void playback_clock_store(", "static void playback_clock_accrue(",
+                      "static void playback_clock_debit(", "static void playback_clock_switch(",
+                      "static void playback_adjust_cancel_stream("]:
         match = re.search(r"(?m)^" + re.escape(signature) + r"[^;]*?\{", source)
         if match is None:
             raise ValueError("Missing playback clock function: " + signature)

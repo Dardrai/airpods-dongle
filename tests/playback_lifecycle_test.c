@@ -142,7 +142,9 @@ static uint8_t aacp_receive_buffer(uint16_t target) {
 }
 static void playback_idle_poll(uint32_t time) { (void)time; }
 static void playback_prepare_packet(void *context, uint32_t time) { (void)context; (void)time; }
+static void (*audio_work_hook)(void);
 static void playback_audio_work(uint32_t time) {
+    if(audio_work_hook)audio_work_hook();
     if(media_tracker.codec_ready_to_send==2)playback_prepare_packet(&media_tracker,time);
 }
 static void playback_bitrate_poll(uint32_t time) {(void)time;}
@@ -662,6 +664,63 @@ static void microphone_and_toggle_cancel_live_clock(void) {
     mic_requested=mic_active=false;
 }
 
+static unsigned completed_source_frames,post_prepare_change;
+static void prepare_crosses_clock_tick(void) {
+    audio_work_hook=NULL;
+    ++now;
+    // Match fill_aac_audio_buffer's fresh clock read and debit after tempo preparation.
+    playback_clock_accrue(&media_tracker,now);
+    playback_clock_debit(&media_tracker,completed_source_frames,playback_adjust.interval);
+    if(post_prepare_change==1)game_peer[0]^=0x80;
+    else if(post_prepare_change==2)++control_session;
+    else if(post_prepare_change==3)game_eligible=false;
+}
+static void game_policy_uses_post_preparation_clock(void) {
+    const uint32_t starts[]={123400u,UINT32_MAX};
+    for(unsigned wrap=0;wrap<sizeof starts/sizeof *starts;++wrap)
+    for(unsigned interval=9;interval<=11;interval+=2)
+    for(unsigned balance=0;balance<3;++balance)
+    for(post_prepare_change=0;post_prepare_change<4;++post_prepare_change) {
+        control_session=1;
+        (void)prepare_live_adjustment(interval);
+        now=starts[wrap];playback_adjust.started=now-20u;
+        media_tracker.time_audio_data_sent=now;
+        media_tracker.samples_ready=balance==0?586u:480u;
+        media_tracker.acc_num_missed_samples=0;media_tracker.sample_debt=0;
+        completed_source_frames=balance==2?482u:480u;
+        media_tracker.codec_ready_to_send=0;
+        a2dp_is_connected_flag=true;mic_prepare_open=mic_recovery_pending=false;
+        playback_game.requested=false;
+        // Source-time oracle includes exactly one elapsed millisecond, never UINT32_MAX.
+        int64_t expected=(int64_t)media_tracker.samples_ready*99000u+
+            (int64_t)48000u*(interval==9?110u:90u)-
+            (int64_t)completed_source_frames*10u*(99000u/interval);
+        expected=expected*interval/10;
+        audio_work_hook=prepare_crosses_clock_tick;
+        dongle_playback_poll();
+        assert(!audio_work_hook && now==starts[wrap]+1u);
+        assert(!playback_adjust_busy(&playback_adjust) && !playback_game.failed);
+        if(media_tracker.time_audio_data_sent!=now)
+            fprintf(stderr,"stale poll interval=%u wrap=%u balance=%u change=%u ready=%u remainder=%u time=%u actual=%u\n",
+                interval,wrap,balance,post_prepare_change,media_tracker.samples_ready,
+                media_tracker.acc_num_missed_samples,media_tracker.time_audio_data_sent,now);
+        assert(media_tracker.time_audio_data_sent==now);
+        assert(scheduled_interval==10 && media_tracker.audio_timer.timeout==now+10u);
+        assert(timer_adds==1 && timer_removes==1 && buffer_target==150);
+        assert(media_tracker.samples_ready==(expected>0?(uint32_t)(expected/99000u):0));
+        assert(media_tracker.acc_num_missed_samples==(expected>0?(uint32_t)(expected%99000u):0));
+        assert(media_tracker.sample_debt==(expected<0?(uint64_t)-expected:0));
+        assert(media_tracker.samples_ready<1000 && media_tracker.sample_debt<1000u*99000u);
+        dongle_playback_poll(); // The same target cannot debit or rescale the clock twice.
+        assert(media_tracker.time_audio_data_sent==now);
+        assert(media_tracker.samples_ready==(expected>0?(uint32_t)(expected/99000u):0));
+        assert(media_tracker.acc_num_missed_samples==(expected>0?(uint32_t)(expected%99000u):0));
+        assert(media_tracker.sample_debt==(expected<0?(uint64_t)-expected:0));
+    }
+    control_session=1;game_session=1;game_eligible=true;
+    puts("Game policy: fresh post-preparation clock, wrap and signed source credit survive target, peer, session and eligibility changes");
+}
+
 
 static void microphone_prepares_normal_buffer_and_binds_repair(bool call) {
     prepare_live_adjustment(11);
@@ -947,6 +1006,7 @@ int main(int argc,char **argv) {
     game_waits_for_encoder_warmup();
     saved_pair_reconnects_with_backoff();
     microphone_and_toggle_cancel_live_clock();
+    game_policy_uses_post_preparation_clock();
     microphone_prepares_normal_buffer_and_binds_repair(false);
     microphone_prepares_normal_buffer_and_binds_repair(true);
     playback_game=(playback_game_t){.requested=true};game_eligible=true;
