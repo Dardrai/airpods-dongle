@@ -140,6 +140,116 @@ static void host_benchmark(void) {
     for(unsigned i=0;i<4;++i)printf("host-only ring-reader stage%u mean_us%.3f max_us%.3f calls%u\n",
         i,total_us[i]/timing_calls,maximum_us[i],timing_calls);
 }
+
+// Scalar pre-optimization oracle: retain its accumulation order to catch PCM or lag changes.
+static float scalar_score(const playback_tempo_work_t *view,const playback_tempo_job_t *job,
+    unsigned reference_piece,int reference,unsigned candidate_piece,int candidate) {
+    float dot=0,a=0,b=0;
+    for(unsigned i=0;i<240;++i)for(unsigned channel=0;channel<2;++channel) {
+        float x=playback_tempo_sample(view,job,reference_piece,reference+(int)i,channel);
+        float y=playback_tempo_sample(view,job,candidate_piece,candidate+(int)i,channel);
+        dot+=x*y;a+=x*x;b+=y*y;
+    }
+    return playback_tempo_score(dot,a,b);
+}
+static int scalar_fine(const playback_tempo_work_t *view,const playback_tempo_job_t *job,
+    unsigned reference_piece,int reference,unsigned candidate_piece,int nominal,unsigned index,int shift) {
+    int lo=shift-3,hi=shift+3;
+    if(lo<job->fine_lo[index])lo=job->fine_lo[index];
+    if(hi>job->fine_hi[index])hi=job->fine_hi[index];
+    int best=lo;float score=-1;
+    for(int delta=lo;delta<=hi;++delta) {
+        float candidate=scalar_score(view,job,reference_piece,reference,candidate_piece,
+            nominal+job->coarse[index]+delta);
+        if(candidate>score+1e-6f || (fabsf(candidate-score)<=1e-6f &&
+            playback_tempo_abs(job->coarse[index]+delta)<playback_tempo_abs(job->coarse[index]+best)))
+            {score=candidate;best=delta;}
+    }
+    return job->coarse[index]+best;
+}
+static void scalar_render(playback_tempo_work_t *view,playback_tempo_job_t *job,
+    playback_encoder_pcm_t *reference) {
+    int hop=(int)job->consumed/2;
+    if(!job->finish) {
+        job->selected[0]=(int16_t)(job->entry?job->coarse[0]:
+            scalar_fine(view,job,0,job->previous_offset,1,hop-240,0,0));
+        job->selected[1]=(int16_t)scalar_fine(view,job,1,hop+job->selected[0],2,2*hop-240,1,
+            job->selected[0]-job->coarse[0]);
+    }
+    memcpy(reference->f32,view->history,sizeof(view->history));
+    for(unsigned block=0;block<2;++block)for(unsigned i=0;i<240;++i)for(unsigned channel=0;channel<2;++channel) {
+        float x=(float)i/239.0f,weight=x*x*(3-2*x),a,b;
+        if(job->finish) {
+            b=playback_tempo_sample(view,job,1,(int)(block*240+i),channel);
+            a=block?b:playback_tempo_sample(view,job,0,job->previous_offset+(int)i,channel);
+        } else {
+            a=block?playback_tempo_sample(view,job,1,hop+job->selected[0]+(int)i,channel):
+                playback_tempo_sample(view,job,0,job->previous_offset+(int)i,channel);
+            b=playback_tempo_sample(view,job,block+1,(int)(block+1)*hop-240+job->selected[block]+(int)i,channel);
+        }
+        reference->f32[2*(32+block*240+i)+channel]=a+(b-a)*weight;
+    }
+    memcpy(view->history,reference->f32+480*2,sizeof(view->history));
+    float coefficients[33];
+    if(job->fraction) {
+        uint32_t phase=job->fraction*PLAYBACK_FILTER_PHASES;
+        unsigned bin=phase/655360u;float blend=(float)(phase%655360u)/655360u;
+        for(unsigned tap=0;tap<33;++tap)coefficients[tap]=playback_filter[0][bin][tap]+blend*
+            (playback_filter[0][bin+1][tap]-playback_filter[0][bin][tap]);
+    }
+    for(unsigned frame=0;frame<480;++frame) {
+        float left=reference->f32[2*(frame+16)],right=reference->f32[2*(frame+16)+1];
+        if(job->fraction) {
+            left=right=0;
+            for(unsigned tap=0;tap<33;++tap) {
+                float coefficient=coefficients[tap];unsigned index=2*(frame+32-tap);
+                left+=coefficient*reference->f32[index];right+=coefficient*reference->f32[index+1];
+            }
+        }
+        reference->q31[2*frame]=playback_pcm_quantize_q31(left);
+        reference->q31[2*frame+1]=playback_pcm_quantize_q31(right);
+    }
+    job->rendered=true;
+}
+static void transition_arithmetic_is_unchanged(void) {
+    static playback_tempo_work_t reference_work;
+    static playback_encoder_pcm_t reference_stage;
+    uint32_t seed=0x6bc217a5;
+    const unsigned fractions[]={0,1,634880,655359};
+    const unsigned consumption[]={384,446,450,528};
+    for(unsigned signal_kind=0;signal_kind<3;++signal_kind) {
+        for(unsigned i=0;i<8192;++i)for(unsigned channel=0;channel<2;++channel) {
+            seed=seed*1664525u+1013904223u;
+            float sample=(float)((int32_t)(seed>>8)-0x800000)/16777216.0f;
+            benchmark_source[2*i+channel]=signal_kind==0?sample:signal_kind==1?sample*0x1p-18f:0;
+        }
+        for(unsigned phase=0;phase<sizeof fractions/sizeof *fractions;++phase) {
+            source_t source={.past=PLAYBACK_TEMPO_PAST,.precomputed=true};
+            playback_tempo_state_t state={0},reference_state={0};
+            for(unsigned block=0;block<50;++block) {
+                unsigned interval=block%25==24?10:block%8<4?9:11;
+                unsigned consumed=interval==10?480:consumption[block%4];
+                source.future=consumed+240;
+                playback_tempo_job_t job;
+                assert(playback_tempo_prepare(&work,&job,&state,(uint8_t)interval,(uint16_t)consumed,
+                    fractions[phase],source.past,source.future,source_read,&source));
+                playback_tempo_search(&work,&job);
+                assert(playback_tempo_select(&work,&job,source_read,&source));
+                reference_work=work;
+                playback_tempo_job_t reference_job=job;
+                scalar_render(&reference_work,&reference_job,&reference_stage);
+                playback_tempo_render_q31(&work,&job,&stage);
+                assert(!memcmp(stage.q31,reference_stage.q31,sizeof stage.q31));
+                assert(!memcmp(job.selected,reference_job.selected,sizeof job.selected));
+                playback_tempo_commit(&state,&job,&work);
+                playback_tempo_commit(&reference_state,&reference_job,&reference_work);
+                assert(!memcmp(&state,&reference_state,sizeof state));
+                source.position+=consumed;
+            }
+        }
+    }
+    puts("Tempo entry, exit and reversal: scalar-equivalent lags, Q31 PCM and history for broadband, quiet stereo and silence");
+}
 static void guards(void) {
     source_t source={.past=33,.future=768,.frequency=1000,.amplitude=0.25};
     playback_tempo_state_t state={0};playback_tempo_job_t job={0};
@@ -160,7 +270,7 @@ static void guards(void) {
     assert(sizeof(work)<=sizeof(playback_resample_t));
 }
 int main(void) {
-    setbuf(stdout,NULL);guards();dc_precision();
+    setbuf(stdout,NULL);guards();dc_precision();transition_arithmetic_is_unchanged();
     const double tones[]={20,40,80,100,1000,12000,16000,20000};
     for(unsigned interval=9;interval<=11;interval+=2)
         for(unsigned i=0;i<sizeof tones/sizeof *tones;++i)tone(tones[i],interval,0,0.25);

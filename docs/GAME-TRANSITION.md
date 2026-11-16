@@ -54,6 +54,26 @@ matching Android's admission bound. The existing ten-second safeguard remains.
 
 ## Validation
 
+The November 16 PC report found crackle and a short interruption in both
+directions despite clean steady Game Mode playback. One repeated On/Off check
+added 432 active dropped frames, 3,010 discarded source-debt frames and one
+timeline recovery, with no USB packet errors or controller flushes. A separate
+worst-cost model (7.93 ms AAC plus 3.30 ms tempo on every unit, not an observed
+average) reproduces recovery when restoring the normal receiver target.
+
+The 0.1.68 candidate sums each fine-search reference energy once and
+filters four output frames together without changing each frame's tap order.
+It retains the selected waveform, PCM precision, receiver targets, clock policy
+and existing static workspace. A scalar pre-change oracle checks identical Q31
+output, selected lags and history across 600 broadband, quiet, silent and
+fractional-phase entry/exit/reversal jobs. On the same PC Pico at 250 MHz, the
+RAM-only four-profile benchmark reduced mean fractional-phase processing from
+3.277/3.306 ms to 2.943/2.964 ms (9/11 ms intervals). Whole flash was compared
+before and after both runs and remained unchanged; 0.1.67 was restored. These
+synthetic timings exclude the encoder, radio and normal interrupts. Listening
+acceptance remains pending; arithmetic equivalence and a lower CPU cost do not
+prove sufficient throughput for every signal or host.
+
 `tools/test.py --sanitize` includes actual-production-path waveform tests for
 unequal and opposite-polarity stereo, deep bass through treble, low-level float
 precision, transitions, reversal/cancellation, retained-history races and USB

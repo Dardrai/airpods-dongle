@@ -231,24 +231,29 @@ static inline float playback_tempo_sample(const playback_tempo_work_t *work,cons
     return work->selected[2*(playback_tempo_piece(piece)+(unsigned)(position-job->base[piece]))+channel];
 }
 static inline float playback_tempo_float_score(const playback_tempo_work_t *work,const playback_tempo_job_t *job,
-    unsigned reference_piece,int reference,unsigned candidate_piece,int candidate) {
-    float dot=0,a=0,b=0;
+    unsigned reference_piece,int reference,unsigned candidate_piece,int candidate,float reference_energy) {
+    float dot=0,b=0;
     for(unsigned i=0;i<240;++i)for(unsigned channel=0;channel<2;++channel) {
         float x=playback_tempo_sample(work,job,reference_piece,reference+(int)i,channel);
         float y=playback_tempo_sample(work,job,candidate_piece,candidate+(int)i,channel);
-        dot+=x*y;a+=x*x;b+=y*y;
+        dot+=x*y;b+=y*y;
     }
-    return playback_tempo_score(dot,a,b);
+    return playback_tempo_score(dot,reference_energy,b);
 }
 static inline int playback_tempo_fine(const playback_tempo_work_t *work,const playback_tempo_job_t *job,
     unsigned reference_piece,int reference,unsigned candidate_piece,int nominal,unsigned index,int shift) {
     int lo=shift-3,hi=shift+3;
     if(lo<job->fine_lo[index])lo=job->fine_lo[index];
     if(hi>job->fine_hi[index])hi=job->fine_hi[index];
+    float reference_energy=0;
+    for(unsigned i=0;i<240;++i)for(unsigned channel=0;channel<2;++channel) {
+        float value=playback_tempo_sample(work,job,reference_piece,reference+(int)i,channel);
+        reference_energy+=value*value;
+    }
     int best=lo;float score=-1;
     for(int delta=lo;delta<=hi;++delta) {
         float candidate=playback_tempo_float_score(work,job,reference_piece,reference,candidate_piece,
-            nominal+job->coarse[index]+delta);
+            nominal+job->coarse[index]+delta,reference_energy);
         if(candidate>score+1e-6f || (fabsf(candidate-score)<=1e-6f &&
             playback_tempo_abs(job->coarse[index]+delta)<playback_tempo_abs(job->coarse[index]+best)))
             {score=candidate;best=delta;}
@@ -288,18 +293,27 @@ static inline void playback_tempo_render_q31(playback_tempo_work_t *work,playbac
         for(unsigned tap=0;tap<33;++tap)coefficients[tap]=playback_filter[0][bin][tap]+blend*
             (playback_filter[0][bin+1][tap]-playback_filter[0][bin][tap]);
     }
-    // Output writes trail every still-needed raw tap, so the 4096-byte staging bank is safe in-place.
-    for(unsigned frame=0;frame<480;++frame) {
-        float left=stage->f32[2*(frame+16)],right=stage->f32[2*(frame+16)+1];
+    // Independent accumulators share coefficient loads without changing any frame's tap order.
+    for(unsigned frame=0;frame<480;frame+=4) {
+        float left[4],right[4];
+        for(unsigned lane=0;lane<4;++lane) {
+            left[lane]=job->fraction?0:stage->f32[2*(frame+lane+16)];
+            right[lane]=job->fraction?0:stage->f32[2*(frame+lane+16)+1];
+        }
         if(job->fraction) {
-            left=right=0;
             for(unsigned tap=0;tap<33;++tap) {
                 float coefficient=coefficients[tap];unsigned index=2*(frame+32-tap);
-                left+=coefficient*stage->f32[index];right+=coefficient*stage->f32[index+1];
+                for(unsigned lane=0;lane<4;++lane) {
+                    left[lane]+=coefficient*stage->f32[index+2*lane];
+                    right[lane]+=coefficient*stage->f32[index+2*lane+1];
+                }
             }
         }
-        stage->q31[2*frame]=playback_pcm_quantize_q31(left);
-        stage->q31[2*frame+1]=playback_pcm_quantize_q31(right);
+        // The four writes still trail every raw tap needed by the following group.
+        for(unsigned lane=0;lane<4;++lane) {
+            stage->q31[2*(frame+lane)]=playback_pcm_quantize_q31(left[lane]);
+            stage->q31[2*(frame+lane)+1]=playback_pcm_quantize_q31(right[lane]);
+        }
     }
     job->rendered=true;
 }
